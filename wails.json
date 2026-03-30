@@ -1,0 +1,7 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Continuum",
+  "outputfilename": "Continuum",
+  "frontend:dir": "./src/frontend",
+  "wailsjsdir": "./src/frontend"
+}
