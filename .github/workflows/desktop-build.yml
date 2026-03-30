@@ -1,0 +1,80 @@
+name: Desktop Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - main.go
+      - wails.json
+      - src/**
+      - go.mod
+      - go.sum
+      - build/**
+
+jobs:
+  build:
+    name: ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            artifact_name: continuum-linux-amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            artifact_name: continuum-linux-arm64
+          - runner: windows-latest
+            platform: windows/amd64
+            artifact_name: continuum-windows-amd64
+          - runner: windows-11-arm
+            platform: windows/arm64
+            artifact_name: continuum-windows-arm64
+          - runner: macos-15-intel
+            platform: darwin/amd64
+            artifact_name: continuum-darwin-amd64
+          - runner: macos-15
+            platform: darwin/arm64
+            artifact_name: continuum-darwin-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build desktop artifact
+        shell: bash
+        run: |
+          EXTRA_ARGS=""
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            EXTRA_ARGS="-tags webkit2_41"
+          fi
+          wails build -clean -platform "${{ matrix.platform }}" -o Continuum ${EXTRA_ARGS}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: build/bin/**
+          if-no-files-found: error
