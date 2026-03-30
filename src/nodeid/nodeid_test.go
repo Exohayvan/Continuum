@@ -121,7 +121,7 @@ func TestGetNodeIDUsesInjectedRuntimeDependencies(t *testing.T) {
 		readNodeHost = originalReadNodeHost
 	})
 
-	runtimeGOOS = func() string { return "windows" }
+	runtimeGOOS = "windows"
 	readNodeIDFile = func(string) (string, error) {
 		t.Fatal("file reads should not be used for windows node IDs")
 		return "", nil

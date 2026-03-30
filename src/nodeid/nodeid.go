@@ -16,7 +16,7 @@ type commandRunner func(name string, args ...string) (string, error)
 type hostnameReader func() (string, error)
 
 var (
-	runtimeGOOS    = func() string { return runtime.GOOS }
+	runtimeGOOS    = runtime.GOOS
 	readNodeIDFile = readTextFile
 	runNodeIDCmd   = runCommand
 	readNodeHost   = os.Hostname
@@ -24,7 +24,7 @@ var (
 
 // GetNodeID returns a deterministic machine identifier hashed with SHA-256.
 func GetNodeID() string {
-	return getNodeID(runtimeGOOS(), readNodeIDFile, runNodeIDCmd, readNodeHost)
+	return getNodeID(runtimeGOOS, readNodeIDFile, runNodeIDCmd, readNodeHost)
 }
 
 func getNodeID(goos string, read fileReader, run commandRunner, hostname hostnameReader) string {
