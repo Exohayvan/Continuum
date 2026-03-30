@@ -11,6 +11,9 @@ import (
 	"testing"
 )
 
+const buildFingerprintMismatch = "buildFingerprint() = %q, want %q"
+const sampleValue = "sample-value"
+
 func TestBuildFingerprintLinuxUsesExpectedSources(t *testing.T) {
 	t.Parallel()
 
@@ -46,7 +49,7 @@ func TestBuildFingerprintLinuxUsesExpectedSources(t *testing.T) {
 	})
 
 	if got != "machine-a|machine-b|uuid-c" {
-		t.Fatalf("buildFingerprint() = %q, want %q", got, "machine-a|machine-b|uuid-c")
+		t.Fatalf(buildFingerprintMismatch, got, "machine-a|machine-b|uuid-c")
 	}
 
 	if !reflect.DeepEqual(readCalls, []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}) {
@@ -69,7 +72,7 @@ func TestBuildFingerprintUsesFallbackWhenIdentifiersAreMissing(t *testing.T) {
 	)
 
 	if got != "fallback-os|linux|test-host" {
-		t.Fatalf("buildFingerprint() = %q, want %q", got, "fallback-os|linux|test-host")
+		t.Fatalf(buildFingerprintMismatch, got, "fallback-os|linux|test-host")
 	}
 }
 
@@ -87,7 +90,7 @@ func TestBuildFingerprintUsesUnknownOSMarker(t *testing.T) {
 	)
 
 	if got != "unknown-os|freebsd" {
-		t.Fatalf("buildFingerprint() = %q, want %q", got, "unknown-os|freebsd")
+		t.Fatalf(buildFingerprintMismatch, got, "unknown-os|freebsd")
 	}
 }
 
@@ -184,8 +187,8 @@ func TestReadTextFileTrimsWhitespace(t *testing.T) {
 		t.Fatalf("readTextFile() error = %v", err)
 	}
 
-	if got != "sample-value" {
-		t.Fatalf("readTextFile() = %q, want %q", got, "sample-value")
+	if got != sampleValue {
+		t.Fatalf("readTextFile() = %q, want %q", got, sampleValue)
 	}
 }
 
@@ -228,10 +231,10 @@ func TestRunCommandTrimsWhitespace(t *testing.T) {
 
 	if runtime.GOOS == "windows" {
 		name = "cmd"
-		args = []string{"/C", "echo sample-value"}
+		args = []string{"/C", "echo " + sampleValue}
 	} else {
 		name = "sh"
-		args = []string{"-c", "printf '  sample-value \\n'"}
+		args = []string{"-c", "printf '  " + sampleValue + " \\n'"}
 	}
 
 	got, err := runCommand(name, args...)
@@ -239,8 +242,8 @@ func TestRunCommandTrimsWhitespace(t *testing.T) {
 		t.Fatalf("runCommand() error = %v", err)
 	}
 
-	if got != "sample-value" {
-		t.Fatalf("runCommand() = %q, want %q", got, "sample-value")
+	if got != sampleValue {
+		t.Fatalf("runCommand() = %q, want %q", got, sampleValue)
 	}
 }
 
