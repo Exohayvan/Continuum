@@ -8,7 +8,12 @@ import (
 	"continuum/src/nodeid"
 )
 
-var getNodeID = nodeid.GetNodeID
+var (
+	getNodeID           = nodeid.GetNodeID
+	stdout    io.Writer = os.Stdout
+	stderr    io.Writer = os.Stderr
+	exit                = os.Exit
+)
 
 func run(w io.Writer) error {
 	_, err := fmt.Fprintln(w, getNodeID())
@@ -16,8 +21,8 @@ func run(w io.Writer) error {
 }
 
 func main() {
-	if err := run(os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	if err := run(stdout); err != nil {
+		fmt.Fprintln(stderr, err)
+		exit(1)
 	}
 }

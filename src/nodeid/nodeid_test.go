@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +109,49 @@ func TestGetNodeIDHashesFingerprintDeterministically(t *testing.T) {
 	}
 }
 
+func TestGetNodeIDUsesInjectedRuntimeDependencies(t *testing.T) {
+	originalRuntimeGOOS := runtimeGOOS
+	originalReadNodeIDFile := readNodeIDFile
+	originalRunNodeIDCmd := runNodeIDCmd
+	originalReadNodeHost := readNodeHost
+	t.Cleanup(func() {
+		runtimeGOOS = originalRuntimeGOOS
+		readNodeIDFile = originalReadNodeIDFile
+		runNodeIDCmd = originalRunNodeIDCmd
+		readNodeHost = originalReadNodeHost
+	})
+
+	runtimeGOOS = func() string { return "windows" }
+	readNodeIDFile = func(string) (string, error) {
+		t.Fatal("file reads should not be used for windows node IDs")
+		return "", nil
+	}
+	runNodeIDCmd = func(name string, args ...string) (string, error) {
+		switch {
+		case name == "wmic" && reflect.DeepEqual(args, []string{"csproduct", "get", "uuid"}):
+			return "uuid-a", nil
+		case name == "powershell" && reflect.DeepEqual(args, []string{"-command", "Get-WmiObject Win32_ComputerSystemProduct | Select-Object -ExpandProperty UUID"}):
+			return "uuid-b", nil
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return "", nil
+		}
+	}
+	readNodeHost = func() (string, error) {
+		t.Fatal("hostname fallback should not be used")
+		return "", nil
+	}
+
+	got := GetNodeID()
+
+	sum := sha256.Sum256([]byte("uuid-a|uuid-b"))
+	want := hex.EncodeToString(sum[:])
+
+	if got != want {
+		t.Fatalf("GetNodeID() = %q, want %q", got, want)
+	}
+}
+
 func TestFilterEmptyRemovesBlankValues(t *testing.T) {
 	t.Parallel()
 
@@ -145,6 +189,35 @@ func TestReadTextFileTrimsWhitespace(t *testing.T) {
 	}
 }
 
+func TestReadTextFileReturnsErrorForMissingFile(t *testing.T) {
+	t.Parallel()
+
+	_, err := readTextFile(filepathJoin(t.TempDir(), "missing.txt"))
+	if err == nil {
+		t.Fatal("readTextFile() error = nil, want non-nil")
+	}
+}
+
+func TestReadOrEmptyReturnsEmptyWhenReaderIsNil(t *testing.T) {
+	t.Parallel()
+
+	got := readOrEmpty(nil, "/tmp/unused")
+	if got != "" {
+		t.Fatalf("readOrEmpty() = %q, want empty string", got)
+	}
+}
+
+func TestReadOrEmptyReturnsEmptyWhenReaderErrors(t *testing.T) {
+	t.Parallel()
+
+	got := readOrEmpty(func(string) (string, error) {
+		return "", errors.New("read failed")
+	}, "/tmp/unused")
+	if got != "" {
+		t.Fatalf("readOrEmpty() = %q, want empty string", got)
+	}
+}
+
 func TestRunCommandTrimsWhitespace(t *testing.T) {
 	t.Parallel()
 
@@ -169,4 +242,61 @@ func TestRunCommandTrimsWhitespace(t *testing.T) {
 	if got != "sample-value" {
 		t.Fatalf("runCommand() = %q, want %q", got, "sample-value")
 	}
+}
+
+func TestRunCommandReturnsErrorForMissingBinary(t *testing.T) {
+	t.Parallel()
+
+	_, err := runCommand("continuum-command-does-not-exist")
+	if err == nil {
+		t.Fatal("runCommand() error = nil, want non-nil")
+	}
+}
+
+func TestRunOrEmptyReturnsEmptyWhenRunnerIsNil(t *testing.T) {
+	t.Parallel()
+
+	got := runOrEmpty(nil, "unused")
+	if got != "" {
+		t.Fatalf("runOrEmpty() = %q, want empty string", got)
+	}
+}
+
+func TestRunOrEmptyReturnsEmptyWhenRunnerErrors(t *testing.T) {
+	t.Parallel()
+
+	got := runOrEmpty(func(string, ...string) (string, error) {
+		return "", errors.New("run failed")
+	}, "unused")
+	if got != "" {
+		t.Fatalf("runOrEmpty() = %q, want empty string", got)
+	}
+}
+
+func TestFallbackPartsReturnsBaseWhenHostnameReaderIsNil(t *testing.T) {
+	t.Parallel()
+
+	got := fallbackParts("linux", nil)
+	want := []string{"fallback-os", "linux"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallbackParts() = %v, want %v", got, want)
+	}
+}
+
+func TestFallbackPartsReturnsBaseWhenHostnameErrors(t *testing.T) {
+	t.Parallel()
+
+	got := fallbackParts("linux", func() (string, error) {
+		return "", errors.New("hostname lookup failed")
+	})
+	want := []string{"fallback-os", "linux"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallbackParts() = %v, want %v", got, want)
+	}
+}
+
+func filepathJoin(parts ...string) string {
+	return strings.Join(parts, string(os.PathSeparator))
 }

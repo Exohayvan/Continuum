@@ -15,9 +15,16 @@ type fileReader func(path string) (string, error)
 type commandRunner func(name string, args ...string) (string, error)
 type hostnameReader func() (string, error)
 
+var (
+	runtimeGOOS    = func() string { return runtime.GOOS }
+	readNodeIDFile = readTextFile
+	runNodeIDCmd   = runCommand
+	readNodeHost   = os.Hostname
+)
+
 // GetNodeID returns a deterministic machine identifier hashed with SHA-256.
 func GetNodeID() string {
-	return getNodeID(runtime.GOOS, readTextFile, runCommand, os.Hostname)
+	return getNodeID(runtimeGOOS(), readNodeIDFile, runNodeIDCmd, readNodeHost)
 }
 
 func getNodeID(goos string, read fileReader, run commandRunner, hostname hostnameReader) string {
