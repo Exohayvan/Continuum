@@ -1,0 +1,131 @@
+:root {
+    color-scheme: dark;
+    --bg-top: #10141d;
+    --bg-bottom: #1b2435;
+    --card: rgba(14, 18, 28, 0.86);
+    --card-border: rgba(130, 161, 255, 0.24);
+    --text: #f5f7fc;
+    --muted: #a7b2c8;
+    --accent: #79d5ff;
+    --accent-strong: #95ffd3;
+    --button: #24304a;
+    --button-hover: #314062;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    min-height: 100%;
+    background:
+        radial-gradient(circle at top left, rgba(121, 213, 255, 0.22), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(149, 255, 211, 0.18), transparent 24%),
+        linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+    color: var(--text);
+    font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+body {
+    min-height: 100vh;
+}
+
+.shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 32px;
+}
+
+.card {
+    width: min(720px, 100%);
+    padding: 36px;
+    border-radius: 28px;
+    border: 1px solid var(--card-border);
+    background: var(--card);
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(18px);
+}
+
+.eyebrow {
+    margin: 0 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 0.78rem;
+    color: var(--accent);
+}
+
+h1 {
+    margin: 0;
+    font-size: clamp(2.2rem, 5vw, 3.5rem);
+    line-height: 0.95;
+}
+
+.lede {
+    margin: 18px 0 28px;
+    max-width: 52ch;
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+.nodeid {
+    padding: 18px 20px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-family: "SFMono-Regular", "JetBrains Mono", "Menlo", monospace;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: var(--accent-strong);
+    word-break: break-word;
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    margin-top: 22px;
+}
+
+button {
+    appearance: none;
+    border: none;
+    border-radius: 999px;
+    padding: 12px 18px;
+    background: var(--button);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    transition: background 160ms ease, transform 160ms ease;
+}
+
+button:hover {
+    background: var(--button-hover);
+    transform: translateY(-1px);
+}
+
+button:disabled {
+    opacity: 0.7;
+    cursor: wait;
+    transform: none;
+}
+
+.status {
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+@media (max-width: 640px) {
+    .shell {
+        padding: 18px;
+    }
+
+    .card {
+        padding: 24px;
+        border-radius: 22px;
+    }
+}

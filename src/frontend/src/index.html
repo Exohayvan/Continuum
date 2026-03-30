@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Continuum</title>
+    <link href="/main.css" rel="stylesheet"/>
+</head>
+<body>
+<main class="shell">
+    <section class="card">
+        <p class="eyebrow">Continuum</p>
+        <h1>Node Identity</h1>
+        <p class="lede">
+            This desktop shell is running locally and displaying the NodeID generated from this machine.
+        </p>
+
+        <div class="nodeid" id="nodeid">Loading NodeID...</div>
+
+        <div class="actions">
+            <button id="refresh" type="button">Refresh NodeID</button>
+            <span class="status" id="status">Resolving NodeID...</span>
+        </div>
+    </section>
+</main>
+<script src="/main.js"></script>
+</body>
+</html>
