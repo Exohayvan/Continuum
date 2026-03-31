@@ -14,7 +14,154 @@ on:
       - build/**
 
 jobs:
-  build:
+  prepare_release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_version: ${{ steps.prepare.outputs.release_version }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      release_sha: ${{ steps.prepare.outputs.release_sha }}
+      changelog_file: ${{ steps.prepare.outputs.changelog_file }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve release version
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag=""
+          for pattern in 'v[0-9]*.[0-9]*.[0-9]*' '[0-9]*.[0-9]*.[0-9]*'; do
+            release_tag="$(git describe --tags --abbrev=0 --match "${pattern}" 2>/dev/null || true)"
+            if [[ -n "${release_tag}" ]]; then
+              break
+            fi
+          done
+
+          if [[ -n "${release_tag}" ]]; then
+            base_version="${release_tag#v}"
+            version_range="${release_tag}..${GITHUB_SHA}"
+          else
+            base_version="$(awk -F': *' '
+              $1 == "major" { major=$2 }
+              $1 == "minor" { minor=$2 }
+              $1 == "patch" { patch=$2 }
+              END { printf "%s.%s.%s", major, minor, patch }
+            ' src/version.yaml)"
+
+            last_version_commit="$(git log -n 1 --format=%H -- src/version.yaml 2>/dev/null || true)"
+            if [[ -n "${last_version_commit}" ]]; then
+              version_range="${last_version_commit}..${GITHUB_SHA}"
+            else
+              version_range="${GITHUB_SHA}"
+            fi
+          fi
+
+          : > "${RUNNER_TEMP}/version-commit-messages.txt"
+          if [[ -n "${version_range}" ]]; then
+            while IFS= read -r commit_sha; do
+              subject="$(git show -s --format=%s "${commit_sha}")"
+              if [[ "${subject}" == *"[skip version bump]"* ]]; then
+                continue
+              fi
+
+              git show -s --format=%B "${commit_sha}" >> "${RUNNER_TEMP}/version-commit-messages.txt"
+              printf '\0' >> "${RUNNER_TEMP}/version-commit-messages.txt"
+            done < <(git log --reverse --format=%H "${version_range}")
+          fi
+
+          go run ./src/cmd/versionbump \
+            -file src/version.yaml \
+            -messages-file "${RUNNER_TEMP}/version-commit-messages.txt" \
+            -base-version "${base_version}"
+
+          release_version="$(awk -F': *' '
+            $1 == "major" { major=$2 }
+            $1 == "minor" { minor=$2 }
+            $1 == "patch" { patch=$2 }
+            END { printf "%s.%s.%s", major, minor, patch }
+          ' src/version.yaml)"
+          release_version="${release_version//$'\n'/}"
+          release_tag_name="v${release_version}"
+
+          if [[ -n "${release_tag}" && "${release_version}" == "${base_version}" ]]; then
+            echo "Computed version ${release_version} matches the latest release ${release_tag}."
+            echo "No new release will be created until newer commits produce a higher version."
+            exit 1
+          fi
+
+          if git rev-parse --verify --quiet "refs/tags/${release_tag_name}" >/dev/null; then
+            echo "Tag ${release_tag_name} already exists."
+            exit 1
+          fi
+
+          if git diff --quiet -- src/version.yaml; then
+            release_sha="${GITHUB_SHA}"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/version.yaml
+            git commit -m "chore: prepare release ${release_tag_name} [skip version bump] [skip desktop build]"
+            git push origin "HEAD:${{ github.ref_name }}"
+            release_sha="$(git rev-parse HEAD)"
+          fi
+
+          mkdir -p release
+          changelog_file="CHANGELOG-${release_tag_name}.md"
+          changelog_path="release/${changelog_file}"
+
+          {
+            printf "# Continuum %s\n\n" "${release_tag_name}"
+            if [[ -n "${release_tag}" ]]; then
+              printf "Changes since %s:\n\n" "${release_tag}"
+              changelog_range="${release_tag}..${GITHUB_SHA}"
+              while IFS= read -r commit_sha; do
+                subject="$(git show -s --format=%s "${commit_sha}")"
+                if [[ "${subject}" == *"[skip version bump]"* ]]; then
+                  continue
+                fi
+                printf -- "- %s %s\n" "$(git rev-parse --short "${commit_sha}")" "${subject}"
+              done < <(git log --reverse --format=%H "${changelog_range}")
+            else
+              printf "Changes included in the first release:\n\n"
+              while IFS= read -r commit_sha; do
+                subject="$(git show -s --format=%s "${commit_sha}")"
+                if [[ "${subject}" == *"[skip version bump]"* ]]; then
+                  continue
+                fi
+                printf -- "- %s %s\n" "$(git rev-parse --short "${commit_sha}")" "${subject}"
+              done < <(git log --reverse --format=%H "${GITHUB_SHA}")
+            fi
+          } > "${changelog_path}"
+
+          {
+            echo "release_version=${release_version}"
+            echo "release_tag=${release_tag_name}"
+            echo "release_sha=${release_sha}"
+            echo "changelog_file=${changelog_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-metadata
+          path: release/
+          if-no-files-found: error
+
+  push_build:
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip desktop build]')
     name: ${{ matrix.artifact_name }}
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -41,7 +188,6 @@ jobs:
           - runner: macos-15
             platform: darwin/arm64
             artifact_name: continuum-darwin-arm64
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -84,3 +230,122 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}.tar.gz
           if-no-files-found: error
+
+  release_build:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare_release
+    name: ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            artifact_name: continuum-linux-amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            artifact_name: continuum-linux-arm64
+          - runner: windows-latest
+            platform: windows/amd64
+            artifact_name: continuum-windows-amd64
+          - runner: windows-11-arm
+            platform: windows/arm64
+            artifact_name: continuum-windows-arm64
+          - runner: macos-15-intel
+            platform: darwin/amd64
+            artifact_name: continuum-darwin-amd64
+          - runner: macos-15
+            platform: darwin/arm64
+            artifact_name: continuum-darwin-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.release_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build desktop artifact
+        shell: bash
+        run: |
+          EXTRA_ARGS=""
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            EXTRA_ARGS="-tags webkit2_41"
+          fi
+          wails build -clean -platform "${{ matrix.platform }}" -o Continuum ${EXTRA_ARGS}
+
+      - name: Package desktop artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          archive_name="${{ matrix.artifact_name }}-${{ needs.prepare_release.outputs.release_tag }}.tar.gz"
+          tar -czf "dist/${archive_name}" -C build/bin .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish_release:
+    if: github.event_name == 'workflow_dispatch'
+    needs:
+      - prepare_release
+      - release_build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release metadata
+        uses: actions/download-artifact@v5
+        with:
+          name: release-metadata
+          path: release-metadata
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: continuum-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.prepare_release.outputs.release_sha }}
+          CHANGELOG_FILE: ${{ needs.prepare_release.outputs.changelog_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists."
+            exit 1
+          fi
+
+          gh release create "${RELEASE_TAG}" \
+            --target "${RELEASE_SHA}" \
+            --title "Continuum ${RELEASE_TAG}" \
+            --notes-file "release-metadata/${CHANGELOG_FILE}" \
+            "release-metadata/${CHANGELOG_FILE}" \
+            release-assets/*
