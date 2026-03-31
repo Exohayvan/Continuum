@@ -3,6 +3,8 @@ package desktop
 import (
 	"context"
 	"testing"
+
+	"continuum/src/updater"
 )
 
 func TestNewAppReturnsEmptyBackend(t *testing.T) {
@@ -13,21 +15,10 @@ func TestNewAppReturnsEmptyBackend(t *testing.T) {
 }
 
 func TestStartupAcceptsContext(t *testing.T) {
-	originalStartAutoUpdate := startAutoUpdate
-	started := false
-	startAutoUpdate = func() { started = true }
-	t.Cleanup(func() {
-		startAutoUpdate = originalStartAutoUpdate
-	})
-
 	app := NewApp()
 	ctx := context.WithValue(context.Background(), testContextKey("suite"), "continuum")
 
 	app.Startup(ctx)
-
-	if !started {
-		t.Fatal("Startup() did not start the background updater")
-	}
 }
 
 func TestNodeIDReturnsResolvedValue(t *testing.T) {
@@ -66,6 +57,65 @@ func TestRemoteVersionReturnsResolvedValue(t *testing.T) {
 	app := NewApp()
 	if got := app.RemoteVersion(); got != "v1.6.0" {
 		t.Fatalf("RemoteVersion() = %q, want %q", got, "v1.6.0")
+	}
+}
+
+func TestUpdateStatusReturnsResolvedValue(t *testing.T) {
+	originalResolveUpdateStatus := resolveUpdateStatus
+	resolveUpdateStatus = func() updater.Status {
+		return updater.Status{
+			CurrentVersion: "1.5.0",
+			RemoteVersion:  "v1.6.0",
+			UpdateRequired: true,
+		}
+	}
+	t.Cleanup(func() {
+		resolveUpdateStatus = originalResolveUpdateStatus
+	})
+
+	app := NewApp()
+	got := app.UpdateStatus()
+	if got.CurrentVersion != "1.5.0" || got.RemoteVersion != "v1.6.0" || !got.UpdateRequired {
+		t.Fatalf("UpdateStatus() = %#v, want update-required status", got)
+	}
+}
+
+func TestUpdateNowRunsUpdater(t *testing.T) {
+	originalRunUpdateNow := runUpdateNow
+	called := false
+	runUpdateNow = func() error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() {
+		runUpdateNow = originalRunUpdateNow
+	})
+
+	app := NewApp()
+	if err := app.UpdateNow(); err != nil {
+		t.Fatalf("UpdateNow() error = %v", err)
+	}
+
+	if !called {
+		t.Fatal("UpdateNow() did not invoke updater")
+	}
+}
+
+func TestExitCallsExitApplication(t *testing.T) {
+	originalExitApplication := exitApplication
+	code := -1
+	exitApplication = func(exitCode int) {
+		code = exitCode
+	}
+	t.Cleanup(func() {
+		exitApplication = originalExitApplication
+	})
+
+	app := NewApp()
+	app.Exit()
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want %d", code, 0)
 	}
 }
 

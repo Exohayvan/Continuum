@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -529,20 +530,17 @@ func TestReplaceUnixBinary(t *testing.T) {
 	if string(data) != "new" {
 		t.Fatalf("replaceUnixBinary() contents = %q, want %q", string(data), "new")
 	}
+
+	if _, err := os.Stat(current + ".bak"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaceUnixBinary() left a .bak file behind: %v", err)
+	}
 }
 
 func TestReplaceUnixBinaryRenameFailure(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
 
-	renameCalls := 0
-	renamePath = func(oldPath string, newPath string) error {
-		renameCalls++
-		if renameCalls == 2 {
-			return fmt.Errorf("rename failed")
-		}
-		return os.Rename(oldPath, newPath)
-	}
+	renamePath = func(string, string) error { return fmt.Errorf("rename failed") }
 
 	root := t.TempDir()
 	current := filepath.Join(root, "Continuum")
@@ -564,15 +562,10 @@ func TestReplaceUnixBinaryRenameFailure(t *testing.T) {
 }
 
 func TestReplaceUnixBinaryInitialRenameFailure(t *testing.T) {
-	restore := stubUpdaterHooks(t)
-	defer restore()
-
-	renamePath = func(string, string) error {
-		return fmt.Errorf("rename failed")
-	}
+	t.Parallel()
 
 	if _, err := replaceUnixBinary("/tmp/current", "/tmp/replacement"); err == nil {
-		t.Fatal("replaceUnixBinary() error = nil, want initial rename failure")
+		t.Fatal("replaceUnixBinary() error = nil, want copy failure")
 	}
 }
 
@@ -641,6 +634,10 @@ func TestReplaceAppBundle(t *testing.T) {
 
 	if string(data) != "new" {
 		t.Fatalf("replaceAppBundle() contents = %q, want %q", string(data), "new")
+	}
+
+	if _, err := os.Stat(currentBundle + ".bak"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaceAppBundle() left a .bak bundle behind: %v", err)
 	}
 }
 
@@ -713,6 +710,10 @@ func TestWindowsUpdateScript(t *testing.T) {
 
 	if !strings.Contains(script, `start "" "%CURRENT%"`) {
 		t.Fatalf("windowsUpdateScript() missing relaunch command: %q", script)
+	}
+
+	if strings.Contains(script, `.bak`) {
+		t.Fatalf("windowsUpdateScript() should not use .bak paths: %q", script)
 	}
 }
 
@@ -870,6 +871,61 @@ func TestCheckAndApplyWrapper(t *testing.T) {
 	currentVersion = func() string { return "dev" }
 	if err := CheckAndApply(); err != nil {
 		t.Fatalf("CheckAndApply() error = %v", err)
+	}
+}
+
+func TestCheckStatusReportsUpdateRequirement(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, releaseJSON)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	got := checkStatus(context.Background(), "1.5.0")
+	if got.CurrentVersion != "1.5.0" {
+		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "1.5.0")
+	}
+	if got.RemoteVersion != "v1.6.0" {
+		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "v1.6.0")
+	}
+	if !got.UpdateRequired {
+		t.Fatal("checkStatus().UpdateRequired = false, want true")
+	}
+}
+
+func TestCheckStatusHandlesUnavailableRemote(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	apiBaseURL = ":"
+
+	got := checkStatus(context.Background(), "1.5.0")
+	if got.RemoteVersion != "unavailable" {
+		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "unavailable")
+	}
+	if got.UpdateRequired {
+		t.Fatal("checkStatus().UpdateRequired = true, want false")
+	}
+}
+
+func TestCheckStatusSkipsInvalidCurrentVersion(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	got := checkStatus(context.Background(), "dev")
+	if got.CurrentVersion != "dev" {
+		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "dev")
+	}
+	if got.RemoteVersion != "unavailable" {
+		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "unavailable")
+	}
+	if got.UpdateRequired {
+		t.Fatal("checkStatus().UpdateRequired = true, want false")
 	}
 }
 

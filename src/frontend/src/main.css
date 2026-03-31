@@ -32,6 +32,50 @@ body {
     min-height: 100vh;
 }
 
+.hidden {
+    display: none;
+}
+
+.update-overlay {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(7, 10, 16, 0.74);
+    backdrop-filter: blur(14px);
+    z-index: 20;
+}
+
+.update-modal {
+    width: min(560px, 100%);
+    padding: 30px;
+    border-radius: 26px;
+    border: 1px solid rgba(255, 151, 112, 0.28);
+    background: rgba(18, 13, 15, 0.94);
+    box-shadow: 0 32px 90px rgba(0, 0, 0, 0.4);
+}
+
+.update-modal h2 {
+    margin: 0;
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    line-height: 1.05;
+}
+
+.update-copy {
+    margin: 16px 0 0;
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.update-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 24px;
+}
+
 .shell {
     min-height: 100vh;
     display: grid;
@@ -122,6 +166,14 @@ button:disabled {
     opacity: 0.7;
     cursor: wait;
     transform: none;
+}
+
+.button-secondary {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.button-secondary:hover {
+    background: rgba(255, 255, 255, 0.12);
 }
 
 .status {

@@ -40,6 +40,12 @@ type Release struct {
 	Assets     []Asset `json:"assets"`
 }
 
+type Status struct {
+	CurrentVersion string `json:"currentVersion"`
+	RemoteVersion  string `json:"remoteVersion"`
+	UpdateRequired bool   `json:"updateRequired"`
+}
+
 var (
 	errNoStableRelease  = errors.New("no stable release available")
 	errNoMatchingAsset  = errors.New("no matching release asset found")
@@ -95,6 +101,10 @@ func CheckAndApply() error {
 	return checkAndApply(context.Background(), currentVersion(), runtime.GOOS, runtime.GOARCH)
 }
 
+func CheckStatus() Status {
+	return checkStatus(context.Background(), currentVersion())
+}
+
 func RemoteVersion() string {
 	if cached := cachedRemoteVersion(); cached != "" {
 		return cached
@@ -121,6 +131,33 @@ func runLoop(interval time.Duration) {
 	for range ticker.Chan() {
 		_ = runCheckAndApply()
 	}
+}
+
+func checkStatus(ctx context.Context, current string) Status {
+	status := Status{
+		CurrentVersion: current,
+		RemoteVersion:  "unavailable",
+	}
+
+	currentValue, err := version.ParseString(current)
+	if err != nil {
+		return status
+	}
+
+	releases, err := fetchReleases(ctx, apiBaseURL, httpClient, RepoOwner, RepoName)
+	if err != nil {
+		return status
+	}
+
+	latest, shouldUpdate, err := latestStableRelease(currentValue, releases)
+	if err != nil {
+		return status
+	}
+
+	storeRemoteVersion(latest.TagName)
+	status.RemoteVersion = cachedRemoteVersion()
+	status.UpdateRequired = shouldUpdate
+	return status
 }
 
 func checkAndApply(ctx context.Context, current string, goos string, goarch string) error {
@@ -494,15 +531,15 @@ func appBundleRoot(executable string) (string, error) {
 }
 
 func replaceUnixBinary(currentPath string, replacementPath string) (string, error) {
-	backupPath := currentPath + ".bak"
-	_ = removePath(backupPath)
+	stagedPath := siblingTempPath(currentPath, ".incoming")
+	_ = removePath(stagedPath)
 
-	if err := renamePath(currentPath, backupPath); err != nil {
+	if err := copyFile(replacementPath, stagedPath); err != nil {
 		return "", err
 	}
 
-	if err := renamePath(replacementPath, currentPath); err != nil {
-		_ = renamePath(backupPath, currentPath)
+	if err := renamePath(stagedPath, currentPath); err != nil {
+		_ = removePath(stagedPath)
 		return "", err
 	}
 
@@ -519,19 +556,88 @@ func replaceAppBundle(currentExecutablePath string, replacementBundle string) (s
 		return "", err
 	}
 
-	backupBundle := currentBundle + ".bak"
-	_ = removeAllPaths(backupBundle)
+	stagedBundle := siblingTempPath(currentBundle, ".incoming")
+	previousBundle := siblingTempPath(currentBundle, ".previous")
+	_ = removeAllPaths(stagedBundle)
+	_ = removeAllPaths(previousBundle)
 
-	if err := renamePath(currentBundle, backupBundle); err != nil {
+	if err := copyTree(replacementBundle, stagedBundle); err != nil {
 		return "", err
 	}
 
-	if err := renamePath(replacementBundle, currentBundle); err != nil {
-		_ = renamePath(backupBundle, currentBundle)
+	if err := renamePath(currentBundle, previousBundle); err != nil {
+		_ = removeAllPaths(stagedBundle)
 		return "", err
 	}
 
+	if err := renamePath(stagedBundle, currentBundle); err != nil {
+		_ = renamePath(previousBundle, currentBundle)
+		_ = removeAllPaths(stagedBundle)
+		return "", err
+	}
+
+	_ = removeAllPaths(previousBundle)
 	return filepath.Join(currentBundle, "Contents", "MacOS", filepath.Base(currentExecutablePath)), nil
+}
+
+func siblingTempPath(path string, suffix string) string {
+	return filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+suffix)
+}
+
+func copyFile(sourcePath string, destinationPath string) error {
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	sourceInfo, err := sourceFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	if err := createDirs(filepath.Dir(destinationPath), 0o755); err != nil {
+		return err
+	}
+
+	destinationFile, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, sourceInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = destinationFile.Close()
+	}()
+
+	if _, err := io.Copy(destinationFile, sourceFile); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func copyTree(sourceRoot string, destinationRoot string) error {
+	return filepath.WalkDir(sourceRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relativePath, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+
+		targetPath := filepath.Join(destinationRoot, relativePath)
+		if d.IsDir() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+
+			return createDirs(targetPath, info.Mode())
+		}
+
+		return copyFile(path, targetPath)
+	})
 }
 
 func scheduleWindowsReplacement(currentPath string, replacementPath string) error {
@@ -555,23 +661,28 @@ func scheduleWindowsReplacement(currentPath string, replacementPath string) erro
 }
 
 func windowsUpdateScript(currentPath string, replacementPath string) string {
-	backupPath := currentPath + ".bak"
+	previousPath := currentPath + ".previous"
 
 	lines := []string{
 		"@echo off",
 		"setlocal",
 		fmt.Sprintf(`set "CURRENT=%s"`, currentPath),
 		fmt.Sprintf(`set "REPLACEMENT=%s"`, replacementPath),
-		fmt.Sprintf(`set "BACKUP=%s"`, backupPath),
+		fmt.Sprintf(`set "PREVIOUS=%s"`, previousPath),
 		"for /L %%i in (1,1,30) do (",
-		`  move /Y "%CURRENT%" "%BACKUP%" >nul 2>nul && goto replaced`,
+		`  move /Y "%CURRENT%" "%PREVIOUS%" >nul 2>nul && goto replaced`,
 		"  ping 127.0.0.1 -n 2 >nul",
 		")",
 		"exit /b 1",
 		":replaced",
-		`move /Y "%REPLACEMENT%" "%CURRENT%" >nul 2>nul`,
+		`move /Y "%REPLACEMENT%" "%CURRENT%" >nul 2>nul || goto restore`,
 		`start "" "%CURRENT%"`,
+		`del /Q "%PREVIOUS%" >nul 2>nul`,
 		`del "%~f0"`,
+		"exit /b 0",
+		":restore",
+		`move /Y "%PREVIOUS%" "%CURRENT%" >nul 2>nul`,
+		"exit /b 1",
 	}
 
 	return strings.Join(lines, "\r\n")
