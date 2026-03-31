@@ -1,5 +1,8 @@
 name: Desktop Build
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   workflow_dispatch:
   push:
@@ -316,13 +319,13 @@ jobs:
       contents: write
     steps:
       - name: Download release metadata
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: release-metadata
           path: release-metadata
 
       - name: Download desktop artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           pattern: continuum-*
           path: release-assets
@@ -330,7 +333,8 @@ jobs:
 
       - name: Create GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
           RELEASE_SHA: ${{ needs.prepare_release.outputs.release_sha }}
           CHANGELOG_FILE: ${{ needs.prepare_release.outputs.changelog_file }}
@@ -338,12 +342,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+          if gh release view "${RELEASE_TAG}" --repo "${GH_REPO}" >/dev/null 2>&1; then
             echo "Release ${RELEASE_TAG} already exists."
             exit 1
           fi
 
           gh release create "${RELEASE_TAG}" \
+            --repo "${GH_REPO}" \
             --target "${RELEASE_SHA}" \
             --title "Continuum ${RELEASE_TAG}" \
             --notes-file "release-metadata/${CHANGELOG_FILE}" \
