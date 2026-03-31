@@ -25,17 +25,88 @@ type Value struct {
 
 var errMissingField = errors.New("version file must define major, minor, and patch")
 
+var (
+	majorKeywords = []string{
+		"breaking",
+		"breaking change",
+		"break",
+		"redid",
+		"rewrite",
+		"rewrote",
+		"overhaul",
+		"overhauled",
+	}
+	minorKeywords = []string{
+		"feat",
+		"feature",
+		"features",
+		"new",
+		"add",
+		"adds",
+		"added",
+		"implement",
+		"implements",
+		"implemented",
+		"enhance",
+		"enhances",
+		"enhanced",
+		"initial",
+		"introduce",
+		"introduces",
+		"introduced",
+		"create",
+		"creates",
+		"created",
+	}
+	patchKeywords = []string{
+		"fix",
+		"fixed",
+		"fixes",
+		"bugfix",
+		"bugfixes",
+		"update",
+		"updates",
+		"updated",
+		"upgrade",
+		"upgrades",
+		"upgraded",
+		"bump",
+		"bumps",
+		"bumped",
+		"refactor",
+		"refactors",
+		"refactored",
+		"cleanup",
+		"cleanups",
+		"cleaned",
+		"adjust",
+		"adjusts",
+		"adjusted",
+		"ci",
+	}
+)
+
 func DetectBump(messages string) Bump {
 	switch {
-	case containsKeyword(messages, "breaking change"), containsKeyword(messages, "redid"):
+	case containsAnyKeyword(messages, majorKeywords):
 		return BumpMajor
-	case containsKeyword(messages, "feature"), containsKeyword(messages, "new"), containsKeyword(messages, "added"):
+	case containsAnyKeyword(messages, minorKeywords):
 		return BumpMinor
-	case containsKeyword(messages, "fix"), containsKeyword(messages, "fixed"), containsKeyword(messages, "fixes"):
+	case containsAnyKeyword(messages, patchKeywords):
 		return BumpPatch
 	default:
 		return BumpNone
 	}
+}
+
+func containsAnyKeyword(messages string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if containsKeyword(messages, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func containsKeyword(messages string, keyword string) bool {

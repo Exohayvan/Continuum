@@ -38,6 +38,31 @@ func TestDetectBump(t *testing.T) {
 			want:     BumpMinor,
 		},
 		{
+			name:     "major from breaking keyword anywhere",
+			messages: "docs update\nthis is a breaking protocol rewrite",
+			want:     BumpMajor,
+		},
+		{
+			name:     "minor from feat prefix",
+			messages: "feat: implement version bump workflow and version management",
+			want:     BumpMinor,
+		},
+		{
+			name:     "minor from add keyword",
+			messages: "Add GitHub Actions workflow for desktop build automation",
+			want:     BumpMinor,
+		},
+		{
+			name:     "minor from enhance keyword",
+			messages: "Enhance README with project details and roadmap",
+			want:     BumpMinor,
+		},
+		{
+			name:     "minor from initial keyword",
+			messages: "Initial commit",
+			want:     BumpMinor,
+		},
+		{
 			name:     "patch from fix keyword",
 			messages: "Fix startup crash",
 			want:     BumpPatch,
@@ -48,8 +73,33 @@ func TestDetectBump(t *testing.T) {
 			want:     BumpPatch,
 		},
 		{
+			name:     "patch from update keyword",
+			messages: "Update indirect dependencies in go.mod and go.sum to latest versions",
+			want:     BumpPatch,
+		},
+		{
+			name:     "patch from bump keyword",
+			messages: "Bump golang.org/x/net from 0.35.0 to 0.38.0",
+			want:     BumpPatch,
+		},
+		{
+			name:     "patch from refactor keyword",
+			messages: "Refactor sonar-project.properties to remove network from sources",
+			want:     BumpPatch,
+		},
+		{
+			name:     "patch from ci prefix",
+			messages: "ci: bump actions/checkout from 5 to 6",
+			want:     BumpPatch,
+		},
+		{
 			name:     "none without keyword",
 			messages: "refactor internal wiring",
+			want:     BumpPatch,
+		},
+		{
+			name:     "none without tracked keyword",
+			messages: "docs only note about local setup",
 			want:     BumpNone,
 		},
 	}
@@ -83,6 +133,18 @@ func TestContainsKeyword(t *testing.T) {
 
 	if containsKeyword("breaking protocol migration", "breaking change") {
 		t.Fatal("containsKeyword() should require the full multi-word phrase")
+	}
+}
+
+func TestContainsAnyKeyword(t *testing.T) {
+	t.Parallel()
+
+	if !containsAnyKeyword("feat: add panel shell", []string{"fix", "feat"}) {
+		t.Fatal("containsAnyKeyword() should match any listed keyword")
+	}
+
+	if containsAnyKeyword("docs only", []string{"fix", "feat"}) {
+		t.Fatal("containsAnyKeyword() should return false when no keywords match")
 	}
 }
 
@@ -226,7 +288,7 @@ func TestBumpFileNoChange(t *testing.T) {
 		t.Fatalf(writeFileFormat, err)
 	}
 
-	got, bump, changed, err := BumpFile(path, "docs cleanup")
+	got, bump, changed, err := BumpFile(path, "docs only note about local setup")
 	if err != nil {
 		t.Fatalf("BumpFile() error = %v", err)
 	}

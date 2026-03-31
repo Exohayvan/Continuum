@@ -13,6 +13,7 @@ import (
 const (
 	messagesFileName     = "messages.txt"
 	fixBootstrapRetry    = "fix bootstrap retry"
+	docsOnlyMessage      = "docs only note about local setup"
 	writeFileErrFormat   = "WriteFile() error = %v"
 	messagesFileFlag     = "-messages-file"
 	bumpedPatchOutput    = "Bumped patch version to 1.2.4\n"
@@ -48,7 +49,7 @@ func TestRunNoChange(t *testing.T) {
 	stdoutWriter = &stdout
 
 	path := filepath.Join(t.TempDir(), messagesFileName)
-	if err := os.WriteFile(path, []byte("docs cleanup"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(docsOnlyMessage), 0o644); err != nil {
 		t.Fatalf(writeFileErrFormat, err)
 	}
 
@@ -174,7 +175,7 @@ func stubVersionBumpIO(t *testing.T) func() {
 		switch messages {
 		case fixBootstrapRetry:
 			return version.Value{Major: 1, Minor: 2, Patch: 4}, version.BumpPatch, true, nil
-		case "docs cleanup":
+		case docsOnlyMessage:
 			return version.Value{Major: 1, Minor: 2, Patch: 3}, version.BumpNone, false, nil
 		default:
 			return version.Value{}, version.BumpNone, false, errors.New("unexpected messages")
