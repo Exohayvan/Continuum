@@ -15,6 +15,7 @@
 
 ![Sonar Coverage](https://img.shields.io/sonar/coverage/Exohayvan_Continuum?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/ExoHayvan/Continuum/total?style=for-the-badge&logo=github)
+![GitHub Release](https://img.shields.io/github/v/release/ExoHayvan/Continuum?include_prereleases&style=for-the-badge&logo=github)
 
 ## 🚀 Overview
 
