@@ -809,13 +809,36 @@ func TestReplaceAppBundleInitialRenameFailure(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
 
+	root := t.TempDir()
+	currentBundle := filepath.Join(root, AppName+".app")
+	currentExec := filepath.Join(currentBundle, "Contents", "MacOS", AppName)
+	replacementBundle := filepath.Join(root, "download", AppName+".app")
+	replacementExec := filepath.Join(replacementBundle, "Contents", "MacOS", AppName)
+
+	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
 	renamePath = func(string, string) error {
 		return fmt.Errorf(renameFailedError)
 	}
 
-	currentExec := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
-	if _, err := replaceAppBundle(currentExec, "/tmp/download/Continuum.app"); err == nil {
+	if _, err := replaceAppBundle(currentExec, replacementBundle); err == nil {
 		t.Fatal("replaceAppBundle() error = nil, want initial rename failure")
+	}
+
+	stagedBundle := siblingTempPath(currentBundle, ".incoming")
+	if _, err := os.Stat(stagedBundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaceAppBundle() left staged bundle behind: %v", err)
 	}
 }
 
@@ -1699,6 +1722,30 @@ func TestApplyExtractedUpdateMissingReplacement(t *testing.T) {
 
 	if _, _, err := applyExtractedUpdate("linux", t.TempDir()); err == nil {
 		t.Fatal("applyExtractedUpdate() error = nil, want missing replacement failure")
+	}
+}
+
+func TestApplyExtractedUpdateMissingReplacementWindows(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	currentExecutable = func() (string, error) { return filepath.Join(tmpContinuumDir, windowsBinaryName), nil }
+
+	if _, _, err := applyExtractedUpdate("windows", t.TempDir()); err == nil {
+		t.Fatal("applyExtractedUpdate() error = nil, want missing Windows replacement failure")
+	}
+}
+
+func TestApplyExtractedUpdateMissingReplacementDarwin(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	currentExecutable = func() (string, error) {
+		return filepath.Join(tmpContinuumDir, AppName+".app", "Contents", "MacOS", AppName), nil
+	}
+
+	if _, _, err := applyExtractedUpdate("darwin", t.TempDir()); err == nil {
+		t.Fatal("applyExtractedUpdate() error = nil, want missing app bundle replacement failure")
 	}
 }
 
