@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -897,6 +898,28 @@ func TestCopyFileCreateDirsError(t *testing.T) {
 	}
 }
 
+func TestCopyFileStatError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source", AppName)
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(source, []byte("data"), 0o644); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	statOpenFile = func(*os.File) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stat failed")
+	}
+
+	if err := copyFile(source, filepath.Join(root, "dest", AppName)); err == nil {
+		t.Fatal("copyFile() error = nil, want stat failure")
+	}
+}
+
 func TestCopyFileDestinationOpenError(t *testing.T) {
 	t.Parallel()
 
@@ -957,6 +980,38 @@ func TestCopyTreeCreateDirsError(t *testing.T) {
 
 	if err := copyTree(sourceRoot, filepath.Join(root, "dest")); err == nil {
 		t.Fatal("copyTree() error = nil, want directory creation failure")
+	}
+}
+
+func TestCopyTreeRelativePathError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "source")
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+
+	relativePath = func(string, string) (string, error) {
+		return "", fmt.Errorf("rel failed")
+	}
+
+	if err := copyTree(sourceRoot, filepath.Join(root, "dest")); err == nil {
+		t.Fatal("copyTree() error = nil, want relative path failure")
+	}
+}
+
+func TestCopyTreeDirInfoError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	walkDirectory = func(root string, fn fs.WalkDirFunc) error {
+		return fn(root, fakeDirEntry{name: "dir", dir: true, infoErr: fmt.Errorf("info failed")}, nil)
+	}
+
+	if err := copyTree(t.TempDir(), filepath.Join(t.TempDir(), "dest")); err == nil {
+		t.Fatal("copyTree() error = nil, want dir info failure")
 	}
 }
 
@@ -1831,6 +1886,9 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalExtractArchive := extractArchive
 	originalApplyUpdate := applyUpdate
 	originalRelaunchUpdated := relaunchUpdated
+	originalStatOpenFile := statOpenFile
+	originalWalkDirectory := walkDirectory
+	originalRelativePath := relativePath
 	originalCurrentVersion := currentVersion
 	originalLatestRemoteVersion := latestRemoteVersion
 
@@ -1854,6 +1912,9 @@ func stubUpdaterHooks(t *testing.T) func() {
 	extractArchive = extractTarGz
 	applyUpdate = applyExtractedUpdate
 	relaunchUpdated = relaunchBinary
+	statOpenFile = func(file *os.File) (os.FileInfo, error) { return file.Stat() }
+	walkDirectory = filepath.WalkDir
+	relativePath = filepath.Rel
 	startOnce = sync.Once{}
 	storeRemoteVersion("")
 
@@ -1878,6 +1939,9 @@ func stubUpdaterHooks(t *testing.T) func() {
 		extractArchive = originalExtractArchive
 		applyUpdate = originalApplyUpdate
 		relaunchUpdated = originalRelaunchUpdated
+		statOpenFile = originalStatOpenFile
+		walkDirectory = originalWalkDirectory
+		relativePath = originalRelativePath
 		startOnce = sync.Once{}
 		storeRemoteVersion(originalLatestRemoteVersion)
 	}
@@ -1894,6 +1958,46 @@ func (f fakeTicker) Chan() <-chan time.Time {
 func (f fakeTicker) Stop() {
 	// No-op: tests control ticker shutdown by closing the channel directly.
 }
+
+type fakeDirEntry struct {
+	name    string
+	dir     bool
+	infoErr error
+}
+
+func (f fakeDirEntry) Name() string {
+	return f.name
+}
+
+func (f fakeDirEntry) IsDir() bool {
+	return f.dir
+}
+
+func (f fakeDirEntry) Type() fs.FileMode {
+	if f.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+
+func (f fakeDirEntry) Info() (fs.FileInfo, error) {
+	if f.infoErr != nil {
+		return nil, f.infoErr
+	}
+	return fakeFileInfo{name: f.name, mode: 0o755 | fs.ModeDir}, nil
+}
+
+type fakeFileInfo struct {
+	name string
+	mode fs.FileMode
+}
+
+func (f fakeFileInfo) Name() string       { return f.name }
+func (f fakeFileInfo) Size() int64        { return 0 }
+func (f fakeFileInfo) Mode() fs.FileMode  { return f.mode }
+func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool        { return f.mode.IsDir() }
+func (f fakeFileInfo) Sys() any           { return nil }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

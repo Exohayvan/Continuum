@@ -72,6 +72,9 @@ var (
 	extractArchive    = extractTarGz
 	applyUpdate       = applyExtractedUpdate
 	relaunchUpdated   = relaunchBinary
+	statOpenFile      = func(file *os.File) (os.FileInfo, error) { return file.Stat() }
+	walkDirectory     = filepath.WalkDir
+	relativePath      = filepath.Rel
 
 	startOnce           sync.Once
 	remoteVersionMu     sync.RWMutex
@@ -622,7 +625,7 @@ func copyFile(sourcePath, destinationPath string) error {
 	}
 	defer sourceFile.Close()
 
-	sourceInfo, err := sourceFile.Stat()
+	sourceInfo, err := statOpenFile(sourceFile)
 	if err != nil {
 		return err
 	}
@@ -647,17 +650,17 @@ func copyFile(sourcePath, destinationPath string) error {
 }
 
 func copyTree(sourceRoot, destinationRoot string) error {
-	return filepath.WalkDir(sourceRoot, func(path string, d fs.DirEntry, err error) error {
+	return walkDirectory(sourceRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		relativePath, err := filepath.Rel(sourceRoot, path)
+		relPath, err := relativePath(sourceRoot, path)
 		if err != nil {
 			return err
 		}
 
-		targetPath := filepath.Join(destinationRoot, relativePath)
+		targetPath := filepath.Join(destinationRoot, relPath)
 		if d.IsDir() {
 			info, err := d.Info()
 			if err != nil {
