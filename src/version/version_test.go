@@ -242,18 +242,9 @@ func TestGet(t *testing.T) {
 	t.Parallel()
 
 	originalRuntimeVersion := runtimeVersion
-	originalReadVersionFile := readVersionFile
-	originalResolveWorkingDirectory := resolveWorkingDirectory
-	originalResolveExecutable := resolveExecutable
 	runtimeVersion = "1.5.0"
-	readVersionFile = os.ReadFile
-	resolveWorkingDirectory = os.Getwd
-	resolveExecutable = os.Executable
 	t.Cleanup(func() {
 		runtimeVersion = originalRuntimeVersion
-		readVersionFile = originalReadVersionFile
-		resolveWorkingDirectory = originalResolveWorkingDirectory
-		resolveExecutable = originalResolveExecutable
 	})
 
 	if got := Get(); got != "1.5.0" {
@@ -265,51 +256,13 @@ func TestGetDefaultsToStoredRuntimeVersion(t *testing.T) {
 	t.Parallel()
 
 	originalRuntimeVersion := runtimeVersion
-	originalReadVersionFile := readVersionFile
-	originalResolveWorkingDirectory := resolveWorkingDirectory
-	originalResolveExecutable := resolveExecutable
 	runtimeVersion = "dev"
-	readVersionFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
-	resolveWorkingDirectory = func() (string, error) { return "", os.ErrNotExist }
-	resolveExecutable = func() (string, error) { return "", os.ErrNotExist }
 	t.Cleanup(func() {
 		runtimeVersion = originalRuntimeVersion
-		readVersionFile = originalReadVersionFile
-		resolveWorkingDirectory = originalResolveWorkingDirectory
-		resolveExecutable = originalResolveExecutable
 	})
 
 	if got := Get(); got != defaultRuntimeVersion {
 		t.Fatalf("Get() = %q, want %q", got, defaultRuntimeVersion)
-	}
-}
-
-func TestGetReadsVersionFromVersionYAML(t *testing.T) {
-	t.Parallel()
-
-	originalRuntimeVersion := runtimeVersion
-	originalReadVersionFile := readVersionFile
-	originalResolveWorkingDirectory := resolveWorkingDirectory
-	originalResolveExecutable := resolveExecutable
-	runtimeVersion = "dev"
-	resolveWorkingDirectory = func() (string, error) { return "/tmp/project/build/bin", nil }
-	resolveExecutable = func() (string, error) { return "", os.ErrNotExist }
-	readVersionFile = func(path string) ([]byte, error) {
-		if path == filepath.Join("/tmp/project", "src", versionFileName) {
-			return []byte("major: 1\nminor: 5\npatch: 1\n"), nil
-		}
-
-		return nil, os.ErrNotExist
-	}
-	t.Cleanup(func() {
-		runtimeVersion = originalRuntimeVersion
-		readVersionFile = originalReadVersionFile
-		resolveWorkingDirectory = originalResolveWorkingDirectory
-		resolveExecutable = originalResolveExecutable
-	})
-
-	if got := Get(); got != "1.5.1" {
-		t.Fatalf("Get() = %q, want %q", got, "1.5.1")
 	}
 }
 

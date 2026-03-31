@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -25,12 +24,9 @@ type Value struct {
 }
 
 var (
-	errMissingField         = errors.New("version file must define major, minor, and patch")
-	errInvalidValue         = errors.New("version string must use semantic version format")
-	runtimeVersion          = "dev"
-	readVersionFile         = os.ReadFile
-	resolveWorkingDirectory = os.Getwd
-	resolveExecutable       = os.Executable
+	errMissingField = errors.New("version file must define major, minor, and patch")
+	errInvalidValue = errors.New("version string must use semantic version format")
+	runtimeVersion  = "dev"
 
 	majorKeywords = []string{
 		"breaking",
@@ -246,75 +242,11 @@ func ParseString(raw string) (Value, error) {
 }
 
 func Get() string {
-	if runtimeVersion == "dev" {
-		if resolved, ok := resolveVersionFromFile(); ok {
-			return resolved
-		}
-
-		return defaultRuntimeVersion
+	if runtimeVersion != "dev" {
+		return runtimeVersion
 	}
 
-	return runtimeVersion
-}
-
-func resolveVersionFromFile() (string, bool) {
-	for _, root := range versionSearchRoots() {
-		for _, path := range versionSearchPaths(root) {
-			data, err := readVersionFile(path)
-			if err != nil {
-				continue
-			}
-
-			value, err := Parse(data)
-			if err != nil {
-				continue
-			}
-
-			return value.String(), true
-		}
-	}
-
-	return "", false
-}
-
-func versionSearchRoots() []string {
-	var roots []string
-
-	if workingDir, err := resolveWorkingDirectory(); err == nil {
-		roots = append(roots, workingDir)
-	}
-
-	if executablePath, err := resolveExecutable(); err == nil {
-		roots = append(roots, filepath.Dir(executablePath))
-	}
-
-	return roots
-}
-
-func versionSearchPaths(root string) []string {
-	var paths []string
-
-	seen := make(map[string]struct{})
-	for current := filepath.Clean(root); ; current = filepath.Dir(current) {
-		for _, candidate := range []string{
-			filepath.Join(current, "src", "version.yaml"),
-			filepath.Join(current, "version.yaml"),
-		} {
-			if _, exists := seen[candidate]; exists {
-				continue
-			}
-
-			seen[candidate] = struct{}{}
-			paths = append(paths, candidate)
-		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-	}
-
-	return paths
+	return defaultRuntimeVersion
 }
 
 func SplitCommitMessages(data []byte) []string {

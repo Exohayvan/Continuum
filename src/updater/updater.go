@@ -64,7 +64,6 @@ var (
 	changeMode        = os.Chmod
 	writeTextFile     = os.WriteFile
 	startOSProcess    = os.StartProcess
-	exitApplication   = os.Exit
 	startAsync        = func(fn func()) { go fn() }
 	runCheckAndApply  = CheckAndApply
 	newLoopTicker     = func(interval time.Duration) loopTicker {
@@ -224,7 +223,6 @@ func checkAndApply(ctx context.Context, current string, goos string, goarch stri
 
 	if windowsHandoff {
 		cleanup = false
-		exitApplication(0)
 		return nil
 	}
 
@@ -232,7 +230,6 @@ func checkAndApply(ctx context.Context, current string, goos string, goarch stri
 		return err
 	}
 
-	exitApplication(0)
 	return nil
 }
 

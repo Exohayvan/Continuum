@@ -898,6 +898,54 @@ func TestCheckStatusReportsUpdateRequirement(t *testing.T) {
 	}
 }
 
+func TestCheckStatusSkipsUpdateWhenVersionsMatch(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"v2.0.0","prerelease":false,"assets":[]}]`)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	got := checkStatus(context.Background(), "2.0.0")
+	if got.CurrentVersion != "2.0.0" {
+		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "2.0.0")
+	}
+	if got.RemoteVersion != "v2.0.0" {
+		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "v2.0.0")
+	}
+	if got.UpdateRequired {
+		t.Fatal("checkStatus().UpdateRequired = true, want false")
+	}
+}
+
+func TestCheckStatusSkipsUpdateWhenCurrentIsNewer(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"v2.0.0","prerelease":false,"assets":[]}]`)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	got := checkStatus(context.Background(), "2.0.1")
+	if got.CurrentVersion != "2.0.1" {
+		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "2.0.1")
+	}
+	if got.RemoteVersion != "v2.0.0" {
+		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "v2.0.0")
+	}
+	if got.UpdateRequired {
+		t.Fatal("checkStatus().UpdateRequired = true, want false")
+	}
+}
+
 func TestCheckStatusHandlesUnavailableRemote(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -1031,19 +1079,12 @@ func TestCheckAndApplyUnix(t *testing.T) {
 		return os.FindProcess(os.Getpid())
 	}
 
-	exitCode := -1
-	exitApplication = func(code int) { exitCode = code }
-
 	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err != nil {
 		t.Fatalf("checkAndApply() error = %v", err)
 	}
 
 	if !launched {
 		t.Fatal("checkAndApply() did not relaunch updated binary")
-	}
-
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want %d", exitCode, 0)
 	}
 
 	data, err := os.ReadFile(current)
@@ -1156,19 +1197,12 @@ func TestCheckAndApplyWindows(t *testing.T) {
 		return os.FindProcess(os.Getpid())
 	}
 
-	exitCode := -1
-	exitApplication = func(code int) { exitCode = code }
-
 	if err := checkAndApply(context.Background(), "1.5.0", "windows", "amd64"); err != nil {
 		t.Fatalf("checkAndApply() error = %v", err)
 	}
 
 	if !started {
 		t.Fatal("checkAndApply() did not launch Windows helper")
-	}
-
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want %d", exitCode, 0)
 	}
 }
 
@@ -1247,7 +1281,6 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalChangeMode := changeMode
 	originalWriteTextFile := writeTextFile
 	originalStartOSProcess := startOSProcess
-	originalExitApplication := exitApplication
 	originalStartAsync := startAsync
 	originalRunCheckAndApply := runCheckAndApply
 	originalNewLoopTicker := newLoopTicker
@@ -1267,7 +1300,6 @@ func stubUpdaterHooks(t *testing.T) func() {
 	changeMode = os.Chmod
 	writeTextFile = os.WriteFile
 	startOSProcess = os.StartProcess
-	exitApplication = os.Exit
 	startAsync = func(fn func()) { go fn() }
 	runCheckAndApply = CheckAndApply
 	newLoopTicker = func(interval time.Duration) loopTicker {
@@ -1289,7 +1321,6 @@ func stubUpdaterHooks(t *testing.T) func() {
 		changeMode = originalChangeMode
 		writeTextFile = originalWriteTextFile
 		startOSProcess = originalStartOSProcess
-		exitApplication = originalExitApplication
 		startAsync = originalStartAsync
 		runCheckAndApply = originalRunCheckAndApply
 		newLoopTicker = originalNewLoopTicker

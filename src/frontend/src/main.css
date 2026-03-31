@@ -32,10 +32,6 @@ body {
     min-height: 100vh;
 }
 
-.hidden {
-    display: none;
-}
-
 .update-overlay {
     position: fixed;
     inset: 0;
@@ -45,6 +41,11 @@ body {
     background: rgba(7, 10, 16, 0.74);
     backdrop-filter: blur(14px);
     z-index: 20;
+}
+
+.hidden,
+.update-overlay.hidden {
+    display: none;
 }
 
 .update-modal {

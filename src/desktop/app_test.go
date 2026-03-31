@@ -82,14 +82,20 @@ func TestUpdateStatusReturnsResolvedValue(t *testing.T) {
 
 func TestUpdateNowRunsUpdater(t *testing.T) {
 	originalRunUpdateNow := runUpdateNow
+	originalQuitApplication := quitApplication
 	called := false
+	quitCalled := false
 	runUpdateNow = func() error {
 		called = true
 		return nil
 	}
 	t.Cleanup(func() {
 		runUpdateNow = originalRunUpdateNow
+		quitApplication = originalQuitApplication
 	})
+	quitApplication = func(context.Context) {
+		quitCalled = true
+	}
 
 	app := NewApp()
 	if err := app.UpdateNow(); err != nil {
@@ -99,23 +105,27 @@ func TestUpdateNowRunsUpdater(t *testing.T) {
 	if !called {
 		t.Fatal("UpdateNow() did not invoke updater")
 	}
+
+	if !quitCalled {
+		t.Fatal("UpdateNow() did not request graceful quit")
+	}
 }
 
-func TestExitCallsExitApplication(t *testing.T) {
-	originalExitApplication := exitApplication
-	code := -1
-	exitApplication = func(exitCode int) {
-		code = exitCode
-	}
+func TestExitCallsQuitApplication(t *testing.T) {
+	originalQuitApplication := quitApplication
+	quitCalled := false
 	t.Cleanup(func() {
-		exitApplication = originalExitApplication
+		quitApplication = originalQuitApplication
 	})
+	quitApplication = func(context.Context) {
+		quitCalled = true
+	}
 
 	app := NewApp()
 	app.Exit()
 
-	if code != 0 {
-		t.Fatalf("exit code = %d, want %d", code, 0)
+	if !quitCalled {
+		t.Fatal("Exit() did not request graceful quit")
 	}
 }
 
