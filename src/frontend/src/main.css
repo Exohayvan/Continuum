@@ -57,6 +57,16 @@ body {
     color: var(--accent);
 }
 
+.meta {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+.meta span {
+    color: var(--accent-strong);
+}
+
 h1 {
     margin: 0;
     font-size: clamp(2.2rem, 5vw, 3.5rem);

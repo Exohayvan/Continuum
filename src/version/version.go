@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -24,8 +25,12 @@ type Value struct {
 }
 
 var (
-	errMissingField = errors.New("version file must define major, minor, and patch")
-	errInvalidValue = errors.New("version string must use semantic version format")
+	errMissingField         = errors.New("version file must define major, minor, and patch")
+	errInvalidValue         = errors.New("version string must use semantic version format")
+	runtimeVersion          = "dev"
+	readVersionFile         = os.ReadFile
+	resolveWorkingDirectory = os.Getwd
+	resolveExecutable       = os.Executable
 
 	majorKeywords = []string{
 		"breaking",
@@ -172,7 +177,7 @@ func splitTokens(messages string) []string {
 
 func Parse(data []byte) (Value, error) {
 	var (
-		value                    Value
+		value                        Value
 		hasMajor, hasMinor, hasPatch bool
 	)
 
@@ -240,6 +245,78 @@ func ParseString(raw string) (Value, error) {
 	return Value{Major: major, Minor: minor, Patch: patch}, nil
 }
 
+func Get() string {
+	if runtimeVersion == "dev" {
+		if resolved, ok := resolveVersionFromFile(); ok {
+			return resolved
+		}
+
+		return defaultRuntimeVersion
+	}
+
+	return runtimeVersion
+}
+
+func resolveVersionFromFile() (string, bool) {
+	for _, root := range versionSearchRoots() {
+		for _, path := range versionSearchPaths(root) {
+			data, err := readVersionFile(path)
+			if err != nil {
+				continue
+			}
+
+			value, err := Parse(data)
+			if err != nil {
+				continue
+			}
+
+			return value.String(), true
+		}
+	}
+
+	return "", false
+}
+
+func versionSearchRoots() []string {
+	var roots []string
+
+	if workingDir, err := resolveWorkingDirectory(); err == nil {
+		roots = append(roots, workingDir)
+	}
+
+	if executablePath, err := resolveExecutable(); err == nil {
+		roots = append(roots, filepath.Dir(executablePath))
+	}
+
+	return roots
+}
+
+func versionSearchPaths(root string) []string {
+	var paths []string
+
+	seen := make(map[string]struct{})
+	for current := filepath.Clean(root); ; current = filepath.Dir(current) {
+		for _, candidate := range []string{
+			filepath.Join(current, "src", "version.yaml"),
+			filepath.Join(current, "version.yaml"),
+		} {
+			if _, exists := seen[candidate]; exists {
+				continue
+			}
+
+			seen[candidate] = struct{}{}
+			paths = append(paths, candidate)
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+
+	return paths
+}
+
 func SplitCommitMessages(data []byte) []string {
 	var messages []string
 
@@ -279,6 +356,17 @@ func (v Value) String() string {
 	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
 }
 
+func (v Value) Compare(other Value) int {
+	switch {
+	case v.Major != other.Major:
+		return compareInt(v.Major, other.Major)
+	case v.Minor != other.Minor:
+		return compareInt(v.Minor, other.Minor)
+	default:
+		return compareInt(v.Patch, other.Patch)
+	}
+}
+
 func (v Value) Marshal() []byte {
 	return []byte(fmt.Sprintf("major: %d\nminor: %d\npatch: %d\n", v.Major, v.Minor, v.Patch))
 }
@@ -303,4 +391,20 @@ func SetFile(path string, value Value) (bool, error) {
 	}
 
 	return true, nil
+}
+
+func SetRuntimeDefaultFile(path string, value Value) error {
+	content := fmt.Sprintf("package version\n\nconst defaultRuntimeVersion = %q\n", value.String())
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func compareInt(left, right int) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }

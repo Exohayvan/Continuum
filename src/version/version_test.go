@@ -15,6 +15,7 @@ patch: 0
 
 const (
 	versionFileName = "version.yaml"
+	runtimeFileName = "runtime_default.go"
 	writeFileFormat = "WriteFile() error = %v"
 )
 
@@ -237,6 +238,81 @@ func TestParseString(t *testing.T) {
 	}
 }
 
+func TestGet(t *testing.T) {
+	t.Parallel()
+
+	originalRuntimeVersion := runtimeVersion
+	originalReadVersionFile := readVersionFile
+	originalResolveWorkingDirectory := resolveWorkingDirectory
+	originalResolveExecutable := resolveExecutable
+	runtimeVersion = "1.5.0"
+	readVersionFile = os.ReadFile
+	resolveWorkingDirectory = os.Getwd
+	resolveExecutable = os.Executable
+	t.Cleanup(func() {
+		runtimeVersion = originalRuntimeVersion
+		readVersionFile = originalReadVersionFile
+		resolveWorkingDirectory = originalResolveWorkingDirectory
+		resolveExecutable = originalResolveExecutable
+	})
+
+	if got := Get(); got != "1.5.0" {
+		t.Fatalf("Get() = %q, want %q", got, "1.5.0")
+	}
+}
+
+func TestGetDefaultsToStoredRuntimeVersion(t *testing.T) {
+	t.Parallel()
+
+	originalRuntimeVersion := runtimeVersion
+	originalReadVersionFile := readVersionFile
+	originalResolveWorkingDirectory := resolveWorkingDirectory
+	originalResolveExecutable := resolveExecutable
+	runtimeVersion = "dev"
+	readVersionFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
+	resolveWorkingDirectory = func() (string, error) { return "", os.ErrNotExist }
+	resolveExecutable = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() {
+		runtimeVersion = originalRuntimeVersion
+		readVersionFile = originalReadVersionFile
+		resolveWorkingDirectory = originalResolveWorkingDirectory
+		resolveExecutable = originalResolveExecutable
+	})
+
+	if got := Get(); got != defaultRuntimeVersion {
+		t.Fatalf("Get() = %q, want %q", got, defaultRuntimeVersion)
+	}
+}
+
+func TestGetReadsVersionFromVersionYAML(t *testing.T) {
+	t.Parallel()
+
+	originalRuntimeVersion := runtimeVersion
+	originalReadVersionFile := readVersionFile
+	originalResolveWorkingDirectory := resolveWorkingDirectory
+	originalResolveExecutable := resolveExecutable
+	runtimeVersion = "dev"
+	resolveWorkingDirectory = func() (string, error) { return "/tmp/project/build/bin", nil }
+	resolveExecutable = func() (string, error) { return "", os.ErrNotExist }
+	readVersionFile = func(path string) ([]byte, error) {
+		if path == filepath.Join("/tmp/project", "src", versionFileName) {
+			return []byte("major: 1\nminor: 5\npatch: 1\n"), nil
+		}
+
+		return nil, os.ErrNotExist
+	}
+	t.Cleanup(func() {
+		runtimeVersion = originalRuntimeVersion
+		readVersionFile = originalReadVersionFile
+		resolveWorkingDirectory = originalResolveWorkingDirectory
+		resolveExecutable = originalResolveExecutable
+	})
+
+	if got := Get(); got != "1.5.1" {
+		t.Fatalf("Get() = %q, want %q", got, "1.5.1")
+	}
+}
+
 func TestParseStringInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +395,33 @@ func TestApply(t *testing.T) {
 
 			if got := base.Apply(tt.bump); got != tt.want {
 				t.Fatalf("Apply() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompare(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		left  Value
+		right Value
+		want  int
+	}{
+		{name: "less than", left: Value{Major: 1, Minor: 2, Patch: 2}, right: Value{Major: 1, Minor: 2, Patch: 3}, want: -1},
+		{name: "minor greater than", left: Value{Major: 1, Minor: 3, Patch: 0}, right: Value{Major: 1, Minor: 2, Patch: 9}, want: 1},
+		{name: "equal", left: Value{Major: 1, Minor: 2, Patch: 3}, right: Value{Major: 1, Minor: 2, Patch: 3}, want: 0},
+		{name: "greater than", left: Value{Major: 2, Minor: 0, Patch: 0}, right: Value{Major: 1, Minor: 9, Patch: 9}, want: 1},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.left.Compare(tt.right); got != tt.want {
+				t.Fatalf("Compare() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -416,5 +519,24 @@ func TestSetFileWriteError(t *testing.T) {
 	_, err := SetFile(path, Value{Major: 1, Minor: 2, Patch: 0})
 	if err == nil {
 		t.Fatal("SetFile() error = nil, want write failure")
+	}
+}
+
+func TestSetRuntimeDefaultFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), runtimeFileName)
+	if err := SetRuntimeDefaultFile(path, Value{Major: 1, Minor: 5, Patch: 2}); err != nil {
+		t.Fatalf("SetRuntimeDefaultFile() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	want := "package version\n\nconst defaultRuntimeVersion = \"1.5.2\"\n"
+	if string(data) != want {
+		t.Fatalf("SetRuntimeDefaultFile() = %q, want %q", string(data), want)
 	}
 }

@@ -10,14 +10,15 @@ import (
 )
 
 var (
-	stdoutWriter       io.Writer = os.Stdout
-	stderrWriter       io.Writer = os.Stderr
-	readFile                      = os.ReadFile
-	parseVersionString            = version.ParseString
-	splitCommitMessages           = version.SplitCommitMessages
-	calculateVersion              = version.Calculate
-	setVersionFile                = version.SetFile
-	exitFunc                      = os.Exit
+	stdoutWriter          io.Writer = os.Stdout
+	stderrWriter          io.Writer = os.Stderr
+	readFile                        = os.ReadFile
+	parseVersionString              = version.ParseString
+	splitCommitMessages             = version.SplitCommitMessages
+	calculateVersion                = version.Calculate
+	setVersionFile                  = version.SetFile
+	setRuntimeDefaultFile           = version.SetRuntimeDefaultFile
+	exitFunc                        = os.Exit
 )
 
 func run(args []string) error {
@@ -53,6 +54,10 @@ func run(args []string) error {
 	next := calculateVersion(base, splitCommitMessages(messages))
 	changed, err := setVersionFile(*versionFile, next)
 	if err != nil {
+		return err
+	}
+
+	if err := setRuntimeDefaultFile("src/version/runtime_default.go", next); err != nil {
 		return err
 	}
 

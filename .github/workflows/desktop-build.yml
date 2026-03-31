@@ -110,12 +110,12 @@ jobs:
             exit 1
           fi
 
-          if git diff --quiet -- src/version.yaml; then
+          if git diff --quiet -- src/version.yaml src/version/runtime_default.go; then
             release_sha="${GITHUB_SHA}"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add src/version.yaml
+            git add src/version.yaml src/version/runtime_default.go
             git commit -m "chore: prepare release ${release_tag_name} [skip version bump] [skip desktop build]"
             git push origin "HEAD:${{ github.ref_name }}"
             release_sha="$(git rev-parse HEAD)"

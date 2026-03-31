@@ -193,6 +193,7 @@ func stubVersionBumpIO(t *testing.T) func() {
 	originalSplitCommitMessages := splitCommitMessages
 	originalCalculateVersion := calculateVersion
 	originalSetVersionFile := setVersionFile
+	originalSetRuntimeDefaultFile := setRuntimeDefaultFile
 	originalExitFunc := exitFunc
 
 	readFile = os.ReadFile
@@ -222,6 +223,15 @@ func stubVersionBumpIO(t *testing.T) func() {
 			return false, errors.New("unexpected version")
 		}
 	}
+	setRuntimeDefaultFile = func(path string, value version.Value) error {
+		if path != "src/version/runtime_default.go" {
+			return errors.New("unexpected runtime version path")
+		}
+		if value != (version.Value{Major: 1, Minor: 2, Patch: 1}) && value != (version.Value{Major: 1, Minor: 1, Patch: 0}) {
+			return errors.New("unexpected runtime version value")
+		}
+		return nil
+	}
 	exitFunc = os.Exit
 
 	return func() {
@@ -232,6 +242,7 @@ func stubVersionBumpIO(t *testing.T) func() {
 		splitCommitMessages = originalSplitCommitMessages
 		calculateVersion = originalCalculateVersion
 		setVersionFile = originalSetVersionFile
+		setRuntimeDefaultFile = originalSetRuntimeDefaultFile
 		exitFunc = originalExitFunc
 	}
 }
