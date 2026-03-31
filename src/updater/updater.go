@@ -26,7 +26,7 @@ const (
 	RepoOwner            = "Exohayvan"
 	RepoName             = "Continuum"
 	AppName              = "Continuum"
-	DefaultCheckInterval = 30 * time.Minute
+	DefaultCheckInterval = 5 * time.Minute
 )
 
 type Asset struct {
