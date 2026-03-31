@@ -10,11 +10,14 @@ import (
 )
 
 var (
-	stdoutWriter   io.Writer = os.Stdout
-	stderrWriter   io.Writer = os.Stderr
-	readFile                  = os.ReadFile
-	bumpVersionFile           = version.BumpFile
-	exitFunc                  = os.Exit
+	stdoutWriter       io.Writer = os.Stdout
+	stderrWriter       io.Writer = os.Stderr
+	readFile                      = os.ReadFile
+	parseVersionString            = version.ParseString
+	splitCommitMessages           = version.SplitCommitMessages
+	calculateVersion              = version.Calculate
+	setVersionFile                = version.SetFile
+	exitFunc                      = os.Exit
 )
 
 func run(args []string) error {
@@ -23,6 +26,7 @@ func run(args []string) error {
 
 	versionFile := flags.String("file", "src/version.yaml", "path to version yaml")
 	messagesFile := flags.String("messages-file", "", "path to a file containing commit messages")
+	baseVersion := flags.String("base-version", "", "semantic version baseline")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -32,12 +36,22 @@ func run(args []string) error {
 		return fmt.Errorf("messages-file is required")
 	}
 
+	if *baseVersion == "" {
+		return fmt.Errorf("base-version is required")
+	}
+
+	base, err := parseVersionString(*baseVersion)
+	if err != nil {
+		return err
+	}
+
 	messages, err := readFile(*messagesFile)
 	if err != nil {
 		return err
 	}
 
-	next, bump, changed, err := bumpVersionFile(*versionFile, string(messages))
+	next := calculateVersion(base, splitCommitMessages(messages))
+	changed, err := setVersionFile(*versionFile, next)
 	if err != nil {
 		return err
 	}
@@ -47,7 +61,7 @@ func run(args []string) error {
 		return err
 	}
 
-	_, err = fmt.Fprintf(stdoutWriter, "Bumped %s version to %s\n", bump, next.String())
+	_, err = fmt.Fprintf(stdoutWriter, "Set version to %s\n", next.String())
 	return err
 }
 

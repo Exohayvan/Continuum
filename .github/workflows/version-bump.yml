@@ -24,17 +24,57 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Collect pushed commit messages
+      - name: Resolve version baseline
         shell: bash
         run: |
-          if [[ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]]; then
-            git log -1 --format=%B "${{ github.sha }}" > "${RUNNER_TEMP}/commit-messages.txt"
+          release_tag=""
+
+          for pattern in 'v[0-9]*.[0-9]*.[0-9]*' '[0-9]*.[0-9]*.[0-9]*'; do
+            release_tag="$(git describe --tags --abbrev=0 --match "${pattern}" 2>/dev/null || true)"
+            if [[ -n "${release_tag}" ]]; then
+              break
+            fi
+          done
+
+          if [[ -n "${release_tag}" ]]; then
+            echo "BASE_VERSION=${release_tag#v}" >> "${GITHUB_ENV}"
+            echo "COMMIT_RANGE=${release_tag}..${{ github.sha }}" >> "${GITHUB_ENV}"
           else
-            git log --format=%B "${{ github.event.before }}..${{ github.sha }}" > "${RUNNER_TEMP}/commit-messages.txt"
+            base_version="$(awk -F': *' '
+              $1 == "major" { major=$2 }
+              $1 == "minor" { minor=$2 }
+              $1 == "patch" { patch=$2 }
+              END { printf "%s.%s.%s", major, minor, patch }
+            ' src/version.yaml)"
+
+            last_version_commit="$(git log -n 1 --format=%H -- src/version.yaml 2>/dev/null || true)"
+            if [[ -n "${last_version_commit}" ]]; then
+              commit_range="${last_version_commit}..${{ github.sha }}"
+            else
+              commit_range="${{ github.sha }}"
+            fi
+
+            echo "BASE_VERSION=${base_version}" >> "${GITHUB_ENV}"
+            echo "COMMIT_RANGE=${commit_range}" >> "${GITHUB_ENV}"
           fi
 
+      - name: Collect commit messages since baseline
+        shell: bash
+        run: |
+          : > "${RUNNER_TEMP}/commit-messages.txt"
+
+          while IFS= read -r commit_sha; do
+            subject="$(git show -s --format=%s "${commit_sha}")"
+            if [[ "${subject}" == *"[skip version bump]"* ]]; then
+              continue
+            fi
+
+            git show -s --format=%B "${commit_sha}" >> "${RUNNER_TEMP}/commit-messages.txt"
+            printf '\0' >> "${RUNNER_TEMP}/commit-messages.txt"
+          done < <(git log --reverse --format=%H "${COMMIT_RANGE}")
+
       - name: Bump version file
-        run: go run ./src/cmd/versionbump -file src/version.yaml -messages-file "${RUNNER_TEMP}/commit-messages.txt"
+        run: go run ./src/cmd/versionbump -file src/version.yaml -messages-file "${RUNNER_TEMP}/commit-messages.txt" -base-version "${BASE_VERSION}"
 
       - name: Commit updated version
         shell: bash
@@ -47,5 +87,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/version.yaml
-          git commit -m "chore: bump version [skip version bump]"
+          git commit -m "chore: bump version"
           git push

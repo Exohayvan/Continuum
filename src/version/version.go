@@ -23,9 +23,10 @@ type Value struct {
 	Patch int
 }
 
-var errMissingField = errors.New("version file must define major, minor, and patch")
-
 var (
+	errMissingField = errors.New("version file must define major, minor, and patch")
+	errInvalidValue = errors.New("version string must use semantic version format")
+
 	majorKeywords = []string{
 		"breaking",
 		"breaking change",
@@ -171,7 +172,7 @@ func splitTokens(messages string) []string {
 
 func Parse(data []byte) (Value, error) {
 	var (
-		value                   Value
+		value                    Value
 		hasMajor, hasMinor, hasPatch bool
 	)
 
@@ -213,6 +214,54 @@ func Parse(data []byte) (Value, error) {
 	return value, nil
 }
 
+func ParseString(raw string) (Value, error) {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.TrimPrefix(trimmed, "v")
+	parts := strings.Split(trimmed, ".")
+	if len(parts) != 3 {
+		return Value{}, errInvalidValue
+	}
+
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return Value{}, errInvalidValue
+	}
+
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return Value{}, errInvalidValue
+	}
+
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return Value{}, errInvalidValue
+	}
+
+	return Value{Major: major, Minor: minor, Patch: patch}, nil
+}
+
+func SplitCommitMessages(data []byte) []string {
+	var messages []string
+
+	for _, raw := range strings.Split(string(data), "\x00") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed != "" {
+			messages = append(messages, trimmed)
+		}
+	}
+
+	return messages
+}
+
+func Calculate(base Value, commitMessages []string) Value {
+	current := base
+	for _, message := range commitMessages {
+		current = current.Apply(DetectBump(message))
+	}
+
+	return current
+}
+
 func (v Value) Apply(bump Bump) Value {
 	switch bump {
 	case BumpMajor:
@@ -234,26 +283,24 @@ func (v Value) Marshal() []byte {
 	return []byte(fmt.Sprintf("major: %d\nminor: %d\npatch: %d\n", v.Major, v.Minor, v.Patch))
 }
 
-func BumpFile(path string, messages string) (Value, Bump, bool, error) {
+func SetFile(path string, value Value) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Value{}, BumpNone, false, err
+		return false, err
 	}
 
 	current, err := Parse(data)
 	if err != nil {
-		return Value{}, BumpNone, false, err
+		return false, err
 	}
 
-	bump := DetectBump(messages)
-	if bump == BumpNone {
-		return current, bump, false, nil
+	if current == value {
+		return false, nil
 	}
 
-	next := current.Apply(bump)
-	if err := os.WriteFile(path, next.Marshal(), 0o644); err != nil {
-		return Value{}, BumpNone, false, err
+	if err := os.WriteFile(path, value.Marshal(), 0o644); err != nil {
+		return false, err
 	}
 
-	return next, bump, true, nil
+	return true, nil
 }

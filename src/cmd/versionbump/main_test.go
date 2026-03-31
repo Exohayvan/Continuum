@@ -11,13 +11,17 @@ import (
 )
 
 const (
-	messagesFileName     = "messages.txt"
-	fixBootstrapRetry    = "fix bootstrap retry"
-	docsOnlyMessage      = "docs only note about local setup"
-	writeFileErrFormat   = "WriteFile() error = %v"
-	messagesFileFlag     = "-messages-file"
-	bumpedPatchOutput    = "Bumped patch version to 1.2.4\n"
-	stdoutMismatchFormat = "stdout = %q, want %q"
+	messagesFileName       = "messages.txt"
+	versionFileName        = "version.yaml"
+	writeFileErrFormat     = "WriteFile() error = %v"
+	messagesFileFlag       = "-messages-file"
+	baseVersionFlag        = "-base-version"
+	baseVersionValue       = "1.1.0"
+	setVersionOutput       = "Set version to 1.2.1\n"
+	unchangedVersionOutput = "Version unchanged at 1.1.0\n"
+	stdoutMismatchFormat   = "stdout = %q, want %q"
+	commitMessagesData     = "feat: add panel shell\x00fix bootstrap retry\x00"
+	docsOnlyMessageData    = "docs only note about local setup\x00"
 )
 
 func TestRun(t *testing.T) {
@@ -27,18 +31,18 @@ func TestRun(t *testing.T) {
 	stdoutWriter = &stdout
 
 	path := filepath.Join(t.TempDir(), messagesFileName)
-	if err := os.WriteFile(path, []byte(fixBootstrapRetry), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(commitMessagesData), 0o644); err != nil {
 		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	err := run([]string{"-file", versionPath(t), messagesFileFlag, path})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path, baseVersionFlag, baseVersionValue})
 	restore()
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
 
-	if got := stdout.String(); got != bumpedPatchOutput {
-		t.Fatalf(stdoutMismatchFormat, got, bumpedPatchOutput)
+	if got := stdout.String(); got != setVersionOutput {
+		t.Fatalf(stdoutMismatchFormat, got, setVersionOutput)
 	}
 }
 
@@ -49,24 +53,30 @@ func TestRunNoChange(t *testing.T) {
 	stdoutWriter = &stdout
 
 	path := filepath.Join(t.TempDir(), messagesFileName)
-	if err := os.WriteFile(path, []byte(docsOnlyMessage), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(docsOnlyMessageData), 0o644); err != nil {
 		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	err := run([]string{"-file", versionPath(t), messagesFileFlag, path})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path, baseVersionFlag, baseVersionValue})
 	restore()
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
 
-	if got := stdout.String(); got != "Version unchanged at 1.2.3\n" {
-		t.Fatalf("stdout = %q, want %q", got, "Version unchanged at 1.2.3\n")
+	if got := stdout.String(); got != unchangedVersionOutput {
+		t.Fatalf(stdoutMismatchFormat, got, unchangedVersionOutput)
 	}
 }
 
 func TestRunMissingMessagesFileFlag(t *testing.T) {
-	if err := run([]string{"-file", "src/version.yaml"}); err == nil {
+	if err := run([]string{"-file", "src/version.yaml", baseVersionFlag, baseVersionValue}); err == nil {
 		t.Fatal("run() error = nil, want missing flag failure")
+	}
+}
+
+func TestRunMissingBaseVersionFlag(t *testing.T) {
+	if err := run([]string{"-file", "src/version.yaml", messagesFileFlag, messagesFileName}); err == nil {
+		t.Fatal("run() error = nil, want missing base version failure")
 	}
 }
 
@@ -76,32 +86,43 @@ func TestRunFlagParseError(t *testing.T) {
 	}
 }
 
+func TestRunParseVersionError(t *testing.T) {
+	restore := stubVersionBumpIO(t)
+	parseVersionString = func(string) (version.Value, error) {
+		return version.Value{}, errors.New("bad base version")
+	}
+
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, messagesFileName, baseVersionFlag, "invalid"})
+	restore()
+	if err == nil {
+		t.Fatal("run() error = nil, want base version parse failure")
+	}
+}
+
 func TestRunReadFileError(t *testing.T) {
 	restore := stubVersionBumpIO(t)
 	readFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
 
-	err := run([]string{"-file", versionPath(t), messagesFileFlag, messagesFileName})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, messagesFileName, baseVersionFlag, baseVersionValue})
 	restore()
 	if err == nil {
 		t.Fatal("run() error = nil, want read failure")
 	}
 }
 
-func TestRunBumpVersionFileError(t *testing.T) {
+func TestRunSetVersionFileError(t *testing.T) {
 	restore := stubVersionBumpIO(t)
-	bumpVersionFile = func(string, string) (version.Value, version.Bump, bool, error) {
-		return version.Value{}, version.BumpNone, false, errors.New("write failed")
-	}
+	setVersionFile = func(string, version.Value) (bool, error) { return false, errors.New("write failed") }
 
 	path := filepath.Join(t.TempDir(), messagesFileName)
-	if err := os.WriteFile(path, []byte("fix retry"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(commitMessagesData), 0o644); err != nil {
 		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	err := run([]string{"-file", versionPath(t), messagesFileFlag, path})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path, baseVersionFlag, baseVersionValue})
 	restore()
 	if err == nil {
-		t.Fatal("run() error = nil, want version bump failure")
+		t.Fatal("run() error = nil, want version write failure")
 	}
 }
 
@@ -145,16 +166,16 @@ func TestMainSucceedsWithoutExit(t *testing.T) {
 	exitFunc = func(code int) { exitCode = code }
 
 	path := filepath.Join(t.TempDir(), messagesFileName)
-	if err := os.WriteFile(path, []byte(fixBootstrapRetry), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(commitMessagesData), 0o644); err != nil {
 		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	os.Args = []string{"versionbump", "-file", versionPath(t), messagesFileFlag, path}
+	os.Args = []string{"versionbump", "-file", versionPath(t), messagesFileFlag, path, baseVersionFlag, baseVersionValue}
 
 	main()
 
-	if got := stdout.String(); got != bumpedPatchOutput {
-		t.Fatalf(stdoutMismatchFormat, got, bumpedPatchOutput)
+	if got := stdout.String(); got != setVersionOutput {
+		t.Fatalf(stdoutMismatchFormat, got, setVersionOutput)
 	}
 
 	if exitCode != 0 {
@@ -168,30 +189,55 @@ func stubVersionBumpIO(t *testing.T) func() {
 	originalStdout := stdoutWriter
 	originalStderr := stderrWriter
 	originalReadFile := readFile
-	originalBumpVersionFile := bumpVersionFile
+	originalParseVersionString := parseVersionString
+	originalSplitCommitMessages := splitCommitMessages
+	originalCalculateVersion := calculateVersion
+	originalSetVersionFile := setVersionFile
+	originalExitFunc := exitFunc
 
 	readFile = os.ReadFile
-	bumpVersionFile = func(_ string, messages string) (version.Value, version.Bump, bool, error) {
-		switch messages {
-		case fixBootstrapRetry:
-			return version.Value{Major: 1, Minor: 2, Patch: 4}, version.BumpPatch, true, nil
-		case docsOnlyMessage:
-			return version.Value{Major: 1, Minor: 2, Patch: 3}, version.BumpNone, false, nil
+	parseVersionString = version.ParseString
+	splitCommitMessages = version.SplitCommitMessages
+	calculateVersion = func(base version.Value, messages []string) version.Value {
+		if base != (version.Value{Major: 1, Minor: 1, Patch: 0}) {
+			return version.Value{}
+		}
+
+		switch len(messages) {
+		case 1:
+			return version.Value{Major: 1, Minor: 1, Patch: 0}
+		case 2:
+			return version.Value{Major: 1, Minor: 2, Patch: 1}
 		default:
-			return version.Value{}, version.BumpNone, false, errors.New("unexpected messages")
+			return version.Value{}
 		}
 	}
+	setVersionFile = func(_ string, value version.Value) (bool, error) {
+		switch value {
+		case (version.Value{Major: 1, Minor: 2, Patch: 1}):
+			return true, nil
+		case (version.Value{Major: 1, Minor: 1, Patch: 0}):
+			return false, nil
+		default:
+			return false, errors.New("unexpected version")
+		}
+	}
+	exitFunc = os.Exit
 
 	return func() {
 		stdoutWriter = originalStdout
 		stderrWriter = originalStderr
 		readFile = originalReadFile
-		bumpVersionFile = originalBumpVersionFile
+		parseVersionString = originalParseVersionString
+		splitCommitMessages = originalSplitCommitMessages
+		calculateVersion = originalCalculateVersion
+		setVersionFile = originalSetVersionFile
+		exitFunc = originalExitFunc
 	}
 }
 
 func versionPath(t *testing.T) string {
 	t.Helper()
 
-	return filepath.Join(t.TempDir(), "version.yaml")
+	return filepath.Join(t.TempDir(), versionFileName)
 }

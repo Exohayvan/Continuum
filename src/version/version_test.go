@@ -8,15 +8,14 @@ import (
 )
 
 const sampleVersionYAML = `# Continuum version
-major: 0
+major: 1
 minor: 1
 patch: 0
 `
 
 const (
-	versionFileName   = "version.yaml"
-	writeFileFormat   = "WriteFile() error = %v"
-	fixStartupMessage = "fix startup"
+	versionFileName = "version.yaml"
+	writeFileFormat = "WriteFile() error = %v"
 )
 
 func TestDetectBump(t *testing.T) {
@@ -40,6 +39,11 @@ func TestDetectBump(t *testing.T) {
 		{
 			name:     "major from breaking keyword anywhere",
 			messages: "docs update\nthis is a breaking protocol rewrite",
+			want:     BumpMajor,
+		},
+		{
+			name:     "major from redid keyword",
+			messages: "redid: simplify context handling in App struct",
 			want:     BumpMajor,
 		},
 		{
@@ -93,11 +97,6 @@ func TestDetectBump(t *testing.T) {
 			want:     BumpPatch,
 		},
 		{
-			name:     "none without keyword",
-			messages: "refactor internal wiring",
-			want:     BumpPatch,
-		},
-		{
 			name:     "none without tracked keyword",
 			messages: "docs only note about local setup",
 			want:     BumpNone,
@@ -113,6 +112,18 @@ func TestDetectBump(t *testing.T) {
 				t.Fatalf("DetectBump() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestContainsAnyKeyword(t *testing.T) {
+	t.Parallel()
+
+	if !containsAnyKeyword("feat: add panel shell", []string{"fix", "feat"}) {
+		t.Fatal("containsAnyKeyword() should match any listed keyword")
+	}
+
+	if containsAnyKeyword("docs only", []string{"fix", "feat"}) {
+		t.Fatal("containsAnyKeyword() should return false when no keywords match")
 	}
 }
 
@@ -133,18 +144,6 @@ func TestContainsKeyword(t *testing.T) {
 
 	if containsKeyword("breaking protocol migration", "breaking change") {
 		t.Fatal("containsKeyword() should require the full multi-word phrase")
-	}
-}
-
-func TestContainsAnyKeyword(t *testing.T) {
-	t.Parallel()
-
-	if !containsAnyKeyword("feat: add panel shell", []string{"fix", "feat"}) {
-		t.Fatal("containsAnyKeyword() should match any listed keyword")
-	}
-
-	if containsAnyKeyword("docs only", []string{"fix", "feat"}) {
-		t.Fatal("containsAnyKeyword() should return false when no keywords match")
 	}
 }
 
@@ -172,8 +171,8 @@ func TestParse(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	if value != (Value{Major: 0, Minor: 1, Patch: 0}) {
-		t.Fatalf("Parse() = %#v, want 0.1.0", value)
+	if value != (Value{Major: 1, Minor: 1, Patch: 0}) {
+		t.Fatalf("Parse() = %#v, want 1.1.0", value)
 	}
 }
 
@@ -206,6 +205,95 @@ func TestParseIgnoresUnknownAndMalformedLines(t *testing.T) {
 
 	if value != (Value{Major: 1, Minor: 2, Patch: 3}) {
 		t.Fatalf("Parse() = %#v, want 1.2.3", value)
+	}
+}
+
+func TestParseString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  Value
+	}{
+		{name: "plain version", input: "1.2.3", want: Value{Major: 1, Minor: 2, Patch: 3}},
+		{name: "v prefix", input: "v2.3.4", want: Value{Major: 2, Minor: 3, Patch: 4}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseString(tt.input)
+			if err != nil {
+				t.Fatalf("ParseString() error = %v", err)
+			}
+
+			if got != tt.want {
+				t.Fatalf("ParseString() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseStringInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{"", "1.2", "one.2.3", "v1.two.3", "1.2.three"}
+	for _, input := range tests {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := ParseString(input)
+			if !errors.Is(err, errInvalidValue) {
+				t.Fatalf("ParseString() error = %v, want %v", err, errInvalidValue)
+			}
+		})
+	}
+}
+
+func TestSplitCommitMessages(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("feat: add panel\x00\x00fix: patch retry\x00  \x00")
+	got := SplitCommitMessages(data)
+	want := []string{"feat: add panel", "fix: patch retry"}
+	if len(got) != len(want) {
+		t.Fatalf("len(SplitCommitMessages()) = %d, want %d", len(got), len(want))
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SplitCommitMessages()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestCalculate(t *testing.T) {
+	t.Parallel()
+
+	base := Value{Major: 1, Minor: 1, Patch: 0}
+	got := Calculate(base, []string{
+		"fix bootstrap retry",
+		"feat: add desktop shell",
+		"update workflow labels",
+		"redid: protocol handshake layout",
+	})
+
+	if got != (Value{Major: 2, Minor: 0, Patch: 0}) {
+		t.Fatalf("Calculate() = %#v, want 2.0.0", got)
+	}
+}
+
+func TestCalculateNoChanges(t *testing.T) {
+	t.Parallel()
+
+	base := Value{Major: 1, Minor: 1, Patch: 0}
+	got := Calculate(base, []string{"docs only note about local setup"})
+	if got != base {
+		t.Fatalf("Calculate() = %#v, want %#v", got, base)
 	}
 }
 
@@ -254,7 +342,7 @@ func TestMarshal(t *testing.T) {
 	}
 }
 
-func TestBumpFile(t *testing.T) {
+func TestSetFile(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
@@ -262,25 +350,17 @@ func TestBumpFile(t *testing.T) {
 		t.Fatalf(writeFileFormat, err)
 	}
 
-	got, bump, changed, err := BumpFile(path, "added bootstrap manifest")
+	changed, err := SetFile(path, Value{Major: 1, Minor: 2, Patch: 0})
 	if err != nil {
-		t.Fatalf("BumpFile() error = %v", err)
+		t.Fatalf("SetFile() error = %v", err)
 	}
 
 	if !changed {
-		t.Fatal("BumpFile() changed = false, want true")
-	}
-
-	if bump != BumpMinor {
-		t.Fatalf("BumpFile() bump = %q, want %q", bump, BumpMinor)
-	}
-
-	if got != (Value{Major: 0, Minor: 2, Patch: 0}) {
-		t.Fatalf("BumpFile() value = %#v, want 0.2.0", got)
+		t.Fatal("SetFile() changed = false, want true")
 	}
 }
 
-func TestBumpFileNoChange(t *testing.T) {
+func TestSetFileNoChange(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
@@ -288,34 +368,26 @@ func TestBumpFileNoChange(t *testing.T) {
 		t.Fatalf(writeFileFormat, err)
 	}
 
-	got, bump, changed, err := BumpFile(path, "docs only note about local setup")
+	changed, err := SetFile(path, Value{Major: 1, Minor: 1, Patch: 0})
 	if err != nil {
-		t.Fatalf("BumpFile() error = %v", err)
+		t.Fatalf("SetFile() error = %v", err)
 	}
 
 	if changed {
-		t.Fatal("BumpFile() changed = true, want false")
-	}
-
-	if bump != BumpNone {
-		t.Fatalf("BumpFile() bump = %q, want %q", bump, BumpNone)
-	}
-
-	if got != (Value{Major: 0, Minor: 1, Patch: 0}) {
-		t.Fatalf("BumpFile() value = %#v, want 0.1.0", got)
+		t.Fatal("SetFile() changed = true, want false")
 	}
 }
 
-func TestBumpFileReadError(t *testing.T) {
+func TestSetFileReadError(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := BumpFile(filepath.Join(t.TempDir(), "missing.yaml"), fixStartupMessage)
+	_, err := SetFile(filepath.Join(t.TempDir(), versionFileName), Value{Major: 1, Minor: 1, Patch: 0})
 	if err == nil {
-		t.Fatal("BumpFile() error = nil, want read failure")
+		t.Fatal("SetFile() error = nil, want read failure")
 	}
 }
 
-func TestBumpFileParseError(t *testing.T) {
+func TestSetFileParseError(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
@@ -323,13 +395,13 @@ func TestBumpFileParseError(t *testing.T) {
 		t.Fatalf(writeFileFormat, err)
 	}
 
-	_, _, _, err := BumpFile(path, fixStartupMessage)
+	_, err := SetFile(path, Value{Major: 1, Minor: 1, Patch: 0})
 	if err == nil {
-		t.Fatal("BumpFile() error = nil, want parse failure")
+		t.Fatal("SetFile() error = nil, want parse failure")
 	}
 }
 
-func TestBumpFileWriteError(t *testing.T) {
+func TestSetFileWriteError(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
@@ -341,8 +413,8 @@ func TestBumpFileWriteError(t *testing.T) {
 		t.Fatalf("Chmod() error = %v", err)
 	}
 
-	_, _, _, err := BumpFile(path, fixStartupMessage)
+	_, err := SetFile(path, Value{Major: 1, Minor: 2, Patch: 0})
 	if err == nil {
-		t.Fatal("BumpFile() error = nil, want write failure")
+		t.Fatal("SetFile() error = nil, want write failure")
 	}
 }
