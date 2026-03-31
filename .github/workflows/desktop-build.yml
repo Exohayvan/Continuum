@@ -220,6 +220,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
+      - name: Prepare Wails build assets
+        shell: bash
+        run: |
+          mkdir -p build
+          cp img/App.png build/appicon.png
+
       - name: Build desktop artifact
         shell: bash
         run: |
@@ -293,6 +299,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Prepare Wails build assets
+        shell: bash
+        run: |
+          mkdir -p build
+          cp img/App.png build/appicon.png
 
       - name: Build desktop artifact
         shell: bash
