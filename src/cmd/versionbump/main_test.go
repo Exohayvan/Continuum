@@ -126,6 +126,22 @@ func TestRunSetVersionFileError(t *testing.T) {
 	}
 }
 
+func TestRunSetRuntimeDefaultFileError(t *testing.T) {
+	restore := stubVersionBumpIO(t)
+	setRuntimeDefaultFile = func(string, version.Value) error { return errors.New("runtime write failed") }
+
+	path := filepath.Join(t.TempDir(), messagesFileName)
+	if err := os.WriteFile(path, []byte(commitMessagesData), 0o644); err != nil {
+		t.Fatalf(writeFileErrFormat, err)
+	}
+
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path, baseVersionFlag, baseVersionValue})
+	restore()
+	if err == nil {
+		t.Fatal("run() error = nil, want runtime default write failure")
+	}
+}
+
 func TestMainWritesErrorAndExits(t *testing.T) {
 	restore := stubVersionBumpIO(t)
 	defer restore()
