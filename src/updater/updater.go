@@ -64,11 +64,14 @@ var (
 	changeMode        = os.Chmod
 	writeTextFile     = os.WriteFile
 	startOSProcess    = os.StartProcess
-	startAsync        = func(fn func()) { go fn() }
+	startAsync        = startAsyncDefault
 	runCheckAndApply  = CheckAndApply
-	newLoopTicker     = func(interval time.Duration) loopTicker {
-		return timeTicker{Ticker: time.NewTicker(interval)}
-	}
+	newLoopTicker     = defaultLoopTicker
+	resolveAsset      = resolveUpdateAsset
+	downloadAsset     = downloadReleaseAsset
+	extractArchive    = extractTarGz
+	applyUpdate       = applyExtractedUpdate
+	relaunchUpdated   = relaunchBinary
 
 	startOnce           sync.Once
 	remoteVersionMu     sync.RWMutex
@@ -82,6 +85,14 @@ type loopTicker interface {
 
 type timeTicker struct {
 	*time.Ticker
+}
+
+func startAsyncDefault(fn func()) {
+	go fn()
+}
+
+func defaultLoopTicker(interval time.Duration) loopTicker {
+	return timeTicker{Ticker: time.NewTicker(interval)}
 }
 
 func (t timeTicker) Chan() <-chan time.Time {
@@ -165,7 +176,7 @@ func checkAndApply(ctx context.Context, current, goos, goarch string) error {
 		return nil
 	}
 
-	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(ctx, currentValue, goos, goarch)
+	assetName, assetURL, shouldUpdate, err := resolveAsset(ctx, currentValue, goos, goarch)
 	if err != nil {
 		return err
 	}
@@ -187,7 +198,7 @@ func checkAndApply(ctx context.Context, current, goos, goarch string) error {
 	}()
 
 	archivePath := filepath.Join(workDir, assetName)
-	if err := downloadReleaseAsset(ctx, httpClient, assetURL, archivePath); err != nil {
+	if err := downloadAsset(ctx, httpClient, assetURL, archivePath); err != nil {
 		return err
 	}
 
@@ -196,11 +207,11 @@ func checkAndApply(ctx context.Context, current, goos, goarch string) error {
 		return err
 	}
 
-	if err := extractTarGz(archivePath, extractDir); err != nil {
+	if err := extractArchive(archivePath, extractDir); err != nil {
 		return err
 	}
 
-	updatedPath, windowsHandoff, err := applyExtractedUpdate(goos, extractDir)
+	updatedPath, windowsHandoff, err := applyUpdate(goos, extractDir)
 	if err != nil {
 		return err
 	}
@@ -210,7 +221,7 @@ func checkAndApply(ctx context.Context, current, goos, goarch string) error {
 		return nil
 	}
 
-	if err := relaunchBinary(updatedPath); err != nil {
+	if err := relaunchUpdated(updatedPath); err != nil {
 		return err
 	}
 

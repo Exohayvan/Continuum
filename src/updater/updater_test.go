@@ -2,6 +2,7 @@ package updater
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -77,6 +78,29 @@ func TestTimeTickerChan(t *testing.T) {
 	if ticker.Chan() == nil {
 		t.Fatal("Chan() = nil, want non-nil channel")
 	}
+}
+
+func TestStartAsyncDefaultRunsFunction(t *testing.T) {
+	done := make(chan struct{})
+
+	startAsyncDefault(func() {
+		close(done)
+	})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("startAsyncDefault() did not run the function")
+	}
+}
+
+func TestDefaultLoopTicker(t *testing.T) {
+	ticker := defaultLoopTicker(time.Millisecond)
+	if ticker == nil {
+		t.Fatal("defaultLoopTicker() = nil, want non-nil ticker")
+	}
+
+	ticker.Stop()
 }
 
 func TestFindAssetURL(t *testing.T) {
@@ -319,6 +343,25 @@ func TestDownloadReleaseAssetOpenError(t *testing.T) {
 	}
 }
 
+func TestDownloadReleaseAssetCreateDirsError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "asset")
+	}))
+	defer server.Close()
+
+	createDirs = func(string, os.FileMode) error {
+		return errors.New("mkdir failed")
+	}
+
+	err := downloadReleaseAsset(context.Background(), server.Client(), server.URL, filepath.Join(t.TempDir(), assetArchiveName))
+	if err == nil {
+		t.Fatal("downloadReleaseAsset() error = nil, want directory creation failure")
+	}
+}
+
 func TestExtractTarGz(t *testing.T) {
 	t.Parallel()
 
@@ -448,6 +491,57 @@ func TestExtractTarGzRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestExtractTarEntryIgnoresUnsupportedType(t *testing.T) {
+	if err := extractTarEntry(tar.NewReader(strings.NewReader("")), t.TempDir(), &tar.Header{Name: "ignored", Typeflag: tar.TypeSymlink}); err != nil {
+		t.Fatalf("extractTarEntry() error = %v, want nil", err)
+	}
+}
+
+func TestWriteTarFileCreateDirsError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	createDirs = func(string, os.FileMode) error {
+		return errors.New("mkdir failed")
+	}
+
+	err := writeTarFile(tar.NewReader(strings.NewReader("")), filepath.Join(t.TempDir(), "nested", "Continuum"), 0o755)
+	if err == nil {
+		t.Fatal("writeTarFile() error = nil, want directory creation failure")
+	}
+}
+
+func TestWriteTarFileOpenError(t *testing.T) {
+	target := t.TempDir()
+
+	err := writeTarFile(tar.NewReader(strings.NewReader("")), target, 0o755)
+	if err == nil {
+		t.Fatal("writeTarFile() error = nil, want open failure")
+	}
+}
+
+func TestWriteTarFileCopyError(t *testing.T) {
+	t.Parallel()
+
+	var archive bytes.Buffer
+	tarWriter := tar.NewWriter(&archive)
+	if err := tarWriter.WriteHeader(&tar.Header{Name: AppName, Mode: 0o755, Size: 5}); err != nil {
+		t.Fatalf("WriteHeader() error = %v", err)
+	}
+	if _, err := archive.WriteString("abc"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+
+	tarReader := tar.NewReader(bytes.NewReader(archive.Bytes()))
+	if _, err := tarReader.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+
+	if err := writeTarFile(tarReader, filepath.Join(t.TempDir(), AppName), 0o755); err == nil {
+		t.Fatal("writeTarFile() error = nil, want copy failure")
+	}
+}
+
 func TestArchiveTargetDestinationRoot(t *testing.T) {
 	t.Parallel()
 
@@ -458,6 +552,15 @@ func TestArchiveTargetDestinationRoot(t *testing.T) {
 
 	if got != filepath.Clean(tmpContinuumDir) {
 		t.Fatalf("archiveTarget() = %q, want %q", got, filepath.Clean(tmpContinuumDir))
+	}
+}
+
+func TestStoreRemoteVersionAddsPrefix(t *testing.T) {
+	storeRemoteVersion("")
+	storeRemoteVersion("1.6.0")
+
+	if got := cachedRemoteVersion(); got != stableReleaseTag {
+		t.Fatalf("cachedRemoteVersion() = %q, want %q", got, stableReleaseTag)
 	}
 }
 
@@ -716,11 +819,121 @@ func TestReplaceAppBundleInitialRenameFailure(t *testing.T) {
 	}
 }
 
+func TestReplaceAppBundleCopyTreeError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	currentExec := filepath.Join(root, AppName+".app", "Contents", "MacOS", AppName)
+	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	if _, err := replaceAppBundle(currentExec, filepath.Join(root, "missing", AppName+".app")); err == nil {
+		t.Fatal("replaceAppBundle() error = nil, want copy-tree failure")
+	}
+}
+
 func TestReplaceAppBundleInvalidExecutable(t *testing.T) {
 	t.Parallel()
 
 	if _, err := replaceAppBundle(tmpContinuumBinary, "/tmp/download/Continuum.app"); err == nil {
 		t.Fatal("replaceAppBundle() error = nil, want invalid bundle failure")
+	}
+}
+
+func TestCopyFileSourceOpenError(t *testing.T) {
+	t.Parallel()
+
+	if err := copyFile(filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "dest", AppName)); err == nil {
+		t.Fatal("copyFile() error = nil, want source open failure")
+	}
+}
+
+func TestCopyFileCreateDirsError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source", AppName)
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(source, []byte("data"), 0o644); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	createDirs = func(string, os.FileMode) error {
+		return fmt.Errorf("mkdir failed")
+	}
+
+	if err := copyFile(source, filepath.Join(root, "dest", AppName)); err == nil {
+		t.Fatal("copyFile() error = nil, want destination directory failure")
+	}
+}
+
+func TestCopyFileDestinationOpenError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source", AppName)
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(source, []byte("data"), 0o644); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	destination := filepath.Join(root, "destdir")
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+
+	if err := copyFile(source, destination); err == nil {
+		t.Fatal("copyFile() error = nil, want destination open failure")
+	}
+}
+
+func TestCopyFileCopyError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source-dir")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+
+	if err := copyFile(source, filepath.Join(root, "dest", AppName)); err == nil {
+		t.Fatal("copyFile() error = nil, want copy failure")
+	}
+}
+
+func TestCopyTreeMissingSource(t *testing.T) {
+	t.Parallel()
+
+	if err := copyTree(filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "dest")); err == nil {
+		t.Fatal("copyTree() error = nil, want missing source failure")
+	}
+}
+
+func TestCopyTreeCreateDirsError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "nested"), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+
+	createDirs = func(string, os.FileMode) error {
+		return fmt.Errorf("mkdir failed")
+	}
+
+	if err := copyTree(sourceRoot, filepath.Join(root, "dest")); err == nil {
+		t.Fatal("copyTree() error = nil, want directory creation failure")
 	}
 }
 
@@ -1277,6 +1490,102 @@ func TestCheckAndApplyDownloadError(t *testing.T) {
 	}
 }
 
+func TestCheckAndApplyCreateTempDirError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	resolveAsset = func(context.Context, version.Value, string, string) (string, string, bool, error) {
+		return assetArchiveName, linuxDownloadURL, true, nil
+	}
+	createTempDir = func(string, string) (string, error) {
+		return "", fmt.Errorf("mktemp failed")
+	}
+
+	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err == nil {
+		t.Fatal("checkAndApply() error = nil, want tempdir failure")
+	}
+}
+
+func TestCheckAndApplyCreateExtractDirError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	workDir := t.TempDir()
+	resolveAsset = func(context.Context, version.Value, string, string) (string, string, bool, error) {
+		return assetArchiveName, linuxDownloadURL, true, nil
+	}
+	createTempDir = func(string, string) (string, error) { return workDir, nil }
+	downloadAsset = func(context.Context, *http.Client, string, string) error { return nil }
+	createDirs = func(path string, mode os.FileMode) error {
+		if path == filepath.Join(workDir, "extract") {
+			return fmt.Errorf("mkdir failed")
+		}
+		return os.MkdirAll(path, mode)
+	}
+
+	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err == nil {
+		t.Fatal("checkAndApply() error = nil, want extract-dir failure")
+	}
+}
+
+func TestCheckAndApplyExtractArchiveError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	workDir := t.TempDir()
+	resolveAsset = func(context.Context, version.Value, string, string) (string, string, bool, error) {
+		return assetArchiveName, linuxDownloadURL, true, nil
+	}
+	createTempDir = func(string, string) (string, error) { return workDir, nil }
+	downloadAsset = func(context.Context, *http.Client, string, string) error { return nil }
+	extractArchive = func(string, string) error { return fmt.Errorf("extract failed") }
+
+	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err == nil {
+		t.Fatal("checkAndApply() error = nil, want archive extraction failure")
+	}
+}
+
+func TestCheckAndApplyApplyUpdateError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	workDir := t.TempDir()
+	resolveAsset = func(context.Context, version.Value, string, string) (string, string, bool, error) {
+		return assetArchiveName, linuxDownloadURL, true, nil
+	}
+	createTempDir = func(string, string) (string, error) { return workDir, nil }
+	downloadAsset = func(context.Context, *http.Client, string, string) error { return nil }
+	extractArchive = func(string, string) error { return nil }
+	applyUpdate = func(string, string) (string, bool, error) {
+		return "", false, fmt.Errorf("apply failed")
+	}
+
+	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err == nil {
+		t.Fatal("checkAndApply() error = nil, want update-apply failure")
+	}
+}
+
+func TestCheckAndApplyRelaunchError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	workDir := t.TempDir()
+	resolveAsset = func(context.Context, version.Value, string, string) (string, string, bool, error) {
+		return assetArchiveName, linuxDownloadURL, true, nil
+	}
+	createTempDir = func(string, string) (string, error) { return workDir, nil }
+	downloadAsset = func(context.Context, *http.Client, string, string) error { return nil }
+	extractArchive = func(string, string) error { return nil }
+	applyUpdate = func(string, string) (string, bool, error) {
+		return tmpContinuumBinary, false, nil
+	}
+	relaunchUpdated = func(string) error { return fmt.Errorf("relaunch failed") }
+
+	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err == nil {
+		t.Fatal("checkAndApply() error = nil, want relaunch failure")
+	}
+}
+
 func TestCheckAndApplyWindows(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -1376,6 +1685,66 @@ func TestApplyExtractedUpdateMissingReplacement(t *testing.T) {
 	}
 }
 
+func TestApplyExtractedUpdateLinux(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	root := t.TempDir()
+	current := filepath.Join(root, AppName)
+	replacement := filepath.Join(root, "extract", AppName)
+
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(replacement), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(replacement, []byte("new"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	currentExecutable = func() (string, error) { return current, nil }
+
+	got, windowsHandoff, err := applyExtractedUpdate("linux", filepath.Join(root, "extract"))
+	if err != nil {
+		t.Fatalf("applyExtractedUpdate() error = %v", err)
+	}
+	if windowsHandoff {
+		t.Fatal("applyExtractedUpdate() windowsHandoff = true, want false")
+	}
+	if got != current {
+		t.Fatalf("applyExtractedUpdate() = %q, want %q", got, current)
+	}
+}
+
+func TestApplyExtractedUpdateWindowsScheduleError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	root := t.TempDir()
+	current := filepath.Join(root, windowsBinaryName)
+	replacement := filepath.Join(root, "extract", windowsBinaryName)
+
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(replacement), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(replacement, []byte("new"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	currentExecutable = func() (string, error) { return current, nil }
+	startOSProcess = func(string, []string, *os.ProcAttr) (*os.Process, error) {
+		return nil, fmt.Errorf("start failed")
+	}
+
+	if _, _, err := applyExtractedUpdate("windows", filepath.Join(root, "extract")); err == nil {
+		t.Fatal("applyExtractedUpdate() error = nil, want Windows scheduling failure")
+	}
+}
+
 func stubUpdaterHooks(t *testing.T) func() {
 	t.Helper()
 
@@ -1393,6 +1762,11 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalStartAsync := startAsync
 	originalRunCheckAndApply := runCheckAndApply
 	originalNewLoopTicker := newLoopTicker
+	originalResolveAsset := resolveAsset
+	originalDownloadAsset := downloadAsset
+	originalExtractArchive := extractArchive
+	originalApplyUpdate := applyUpdate
+	originalRelaunchUpdated := relaunchUpdated
 	originalCurrentVersion := currentVersion
 	originalLatestRemoteVersion := latestRemoteVersion
 
@@ -1408,11 +1782,14 @@ func stubUpdaterHooks(t *testing.T) func() {
 	changeMode = os.Chmod
 	writeTextFile = os.WriteFile
 	startOSProcess = os.StartProcess
-	startAsync = func(fn func()) { go fn() }
+	startAsync = startAsyncDefault
 	runCheckAndApply = CheckAndApply
-	newLoopTicker = func(interval time.Duration) loopTicker {
-		return timeTicker{Ticker: time.NewTicker(interval)}
-	}
+	newLoopTicker = defaultLoopTicker
+	resolveAsset = resolveUpdateAsset
+	downloadAsset = downloadReleaseAsset
+	extractArchive = extractTarGz
+	applyUpdate = applyExtractedUpdate
+	relaunchUpdated = relaunchBinary
 	startOnce = sync.Once{}
 	storeRemoteVersion("")
 
@@ -1432,6 +1809,11 @@ func stubUpdaterHooks(t *testing.T) func() {
 		startAsync = originalStartAsync
 		runCheckAndApply = originalRunCheckAndApply
 		newLoopTicker = originalNewLoopTicker
+		resolveAsset = originalResolveAsset
+		downloadAsset = originalDownloadAsset
+		extractArchive = originalExtractArchive
+		applyUpdate = originalApplyUpdate
+		relaunchUpdated = originalRelaunchUpdated
 		startOnce = sync.Once{}
 		storeRemoteVersion(originalLatestRemoteVersion)
 	}
