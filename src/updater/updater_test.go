@@ -898,6 +898,23 @@ func TestCheckAndApplyWrapper(t *testing.T) {
 	}
 }
 
+func TestCheckStatusWrapper(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, releaseJSON)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+	currentVersion = func() string { return "1.5.0" }
+
+	got := CheckStatus()
+	assertCheckStatus(t, got, "1.5.0", stableReleaseTag, true)
+}
+
 func TestCheckStatusReportsUpdateRequirement(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -964,6 +981,22 @@ func TestCheckStatusSkipsInvalidCurrentVersion(t *testing.T) {
 	assertCheckStatus(t, got, "dev", unavailableRemote, false)
 }
 
+func TestCheckStatusHandlesLatestStableReleaseError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"latest","prerelease":false,"assets":[]}]`)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	got := checkStatus(context.Background(), "1.5.0")
+	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false)
+}
+
 func TestRemoteVersionFetchesAndCachesLatest(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -995,6 +1028,23 @@ func TestRemoteVersionUnavailableOnFetchError(t *testing.T) {
 
 	if got := RemoteVersion(); got != unavailableRemote {
 		t.Fatalf("RemoteVersion() = %q, want %q", got, unavailableRemote)
+	}
+}
+
+func TestFetchLatestRemoteVersionLatestStableReleaseError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"latest","prerelease":false,"assets":[]}]`)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	if _, err := fetchLatestRemoteVersion(context.Background()); err == nil {
+		t.Fatal("fetchLatestRemoteVersion() error = nil, want latest-release failure")
 	}
 }
 
@@ -1101,6 +1151,60 @@ func TestCheckAndApplyNoStableRelease(t *testing.T) {
 	}
 }
 
+func TestResolveUpdateAssetFetchError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	apiBaseURL = ":"
+
+	_, _, _, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 5, Patch: 0}, "linux", "amd64")
+	if err == nil {
+		t.Fatal("resolveUpdateAsset() error = nil, want fetch failure")
+	}
+}
+
+func TestResolveUpdateAssetNoStableRelease(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"v2.0.0-beta.1","prerelease":true,"assets":[]}]`)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 5, Patch: 0}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("resolveUpdateAsset() error = %v", err)
+	}
+	if assetName != "" || assetURL != "" || shouldUpdate {
+		t.Fatalf("resolveUpdateAsset() = (%q, %q, %t), want empty no-update result", assetName, assetURL, shouldUpdate)
+	}
+}
+
+func TestResolveUpdateAssetNoUpdateWhenCurrentMatchesLatest(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, singleReleaseJSON(stableReleaseTag))
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 6, Patch: 0}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("resolveUpdateAsset() error = %v", err)
+	}
+	if assetName != "" || assetURL != "" || shouldUpdate {
+		t.Fatalf("resolveUpdateAsset() = (%q, %q, %t), want empty no-update result", assetName, assetURL, shouldUpdate)
+	}
+}
+
 func TestCheckAndApplyFetchError(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -1109,6 +1213,23 @@ func TestCheckAndApplyFetchError(t *testing.T) {
 
 	if err := checkAndApply(context.Background(), "1.5.0", "linux", "amd64"); err == nil {
 		t.Fatal("checkAndApply() error = nil, want fetch failure")
+	}
+}
+
+func TestCheckAndApplyPropagatesResolveUpdateAssetError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"v1.6.0","prerelease":false,"assets":[{"name":"latest","browser_download_url":"https://example.test/latest"}]}]`)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	if err := checkAndApply(context.Background(), "1.5.0", "linux", "arm64"); err == nil {
+		t.Fatal("checkAndApply() error = nil, want resolve-update failure")
 	}
 }
 
