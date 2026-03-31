@@ -1,3 +1,3 @@
 package version
 
-const defaultRuntimeVersion = "2.1.2"
+const defaultRuntimeVersion = "2.1.12"
