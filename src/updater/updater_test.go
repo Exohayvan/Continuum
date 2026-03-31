@@ -18,7 +18,8 @@ import (
 	"continuum/src/version"
 )
 
-const releaseJSON = `[
+const (
+	releaseJSON = `[
   {
     "tag_name": "v1.6.0",
     "prerelease": false,
@@ -35,12 +36,35 @@ const releaseJSON = `[
     "assets": []
   }
 ]`
+	linuxAMD64AssetV150            = "continuum-linux-amd64-v1.5.0.tar.gz"
+	linuxDownloadURL               = "https://example.test/linux"
+	stableReleaseTag               = "v1.6.0"
+	releasesAPIPath                = "/repos/Exohayvan/Continuum/releases"
+	releaseAssetContents           = "release-asset"
+	assetArchiveName               = "asset.tar.gz"
+	archiveFileName                = "archive.tar.gz"
+	readFileErrorFormat            = "ReadFile() error = %v"
+	writeTarGzErrorFormat          = "writeTarGz() error = %v"
+	writeFileErrorFormat           = "WriteFile() error = %v"
+	closeErrorFormat               = "Close() error = %v"
+	tmpContinuumDir                = "/tmp/continuum"
+	mkdirAllErrorFormat            = "MkdirAll() error = %v"
+	tmpContinuumBinary             = "/tmp/Continuum"
+	renameFailedError              = "rename failed"
+	windowsBinaryName              = "Continuum.exe"
+	processMismatchFormat          = "process = %q, want %q"
+	checkStatusCurrentFormat       = "checkStatus().CurrentVersion = %q, want %q"
+	checkStatusRemoteFormat        = "checkStatus().RemoteVersion = %q, want %q"
+	stableReleaseTagV200           = "v2.0.0"
+	checkStatusUpdateRequiredFalse = "checkStatus().UpdateRequired = true, want false"
+	unavailableRemote              = "unavailable"
+)
 
 func TestBuildAssetName(t *testing.T) {
 	t.Parallel()
 
-	if got := buildAssetName("1.5.0", "linux", "amd64"); got != "continuum-linux-amd64-v1.5.0.tar.gz" {
-		t.Fatalf("buildAssetName() = %q, want %q", got, "continuum-linux-amd64-v1.5.0.tar.gz")
+	if got := buildAssetName("1.5.0", "linux", "amd64"); got != linuxAMD64AssetV150 {
+		t.Fatalf("buildAssetName() = %q, want %q", got, linuxAMD64AssetV150)
 	}
 }
 
@@ -61,17 +85,17 @@ func TestFindAssetURL(t *testing.T) {
 	release := Release{
 		TagName: "v1.5.0",
 		Assets: []Asset{
-			{Name: "continuum-linux-amd64-v1.5.0.tar.gz", BrowserDownloadURL: "https://example.test/linux"},
+			{Name: linuxAMD64AssetV150, BrowserDownloadURL: linuxDownloadURL},
 		},
 	}
 
-	got, err := findAssetURL(release, "continuum-linux-amd64-v1.5.0.tar.gz")
+	got, err := findAssetURL(release, linuxAMD64AssetV150)
 	if err != nil {
 		t.Fatalf("findAssetURL() error = %v", err)
 	}
 
-	if got != "https://example.test/linux" {
-		t.Fatalf("findAssetURL() = %q, want %q", got, "https://example.test/linux")
+	if got != linuxDownloadURL {
+		t.Fatalf("findAssetURL() = %q, want %q", got, linuxDownloadURL)
 	}
 }
 
@@ -89,7 +113,7 @@ func TestLatestStableRelease(t *testing.T) {
 
 	current := version.Value{Major: 1, Minor: 5, Patch: 0}
 	releases := []Release{
-		{TagName: "v1.6.0", Prerelease: false},
+		{TagName: stableReleaseTag, Prerelease: false},
 		{TagName: "v1.7.0-beta.1", Prerelease: true},
 		{TagName: "v1.5.1", Prerelease: false},
 	}
@@ -103,8 +127,8 @@ func TestLatestStableRelease(t *testing.T) {
 		t.Fatal("latestStableRelease() shouldUpdate = false, want true")
 	}
 
-	if got.TagName != "v1.6.0" {
-		t.Fatalf("latestStableRelease() tag = %q, want %q", got.TagName, "v1.6.0")
+	if got.TagName != stableReleaseTag {
+		t.Fatalf("latestStableRelease() tag = %q, want %q", got.TagName, stableReleaseTag)
 	}
 }
 
@@ -112,7 +136,7 @@ func TestLatestStableReleaseNoUpdate(t *testing.T) {
 	t.Parallel()
 
 	current := version.Value{Major: 1, Minor: 6, Patch: 0}
-	got, shouldUpdate, err := latestStableRelease(current, []Release{{TagName: "v1.6.0"}})
+	got, shouldUpdate, err := latestStableRelease(current, []Release{{TagName: stableReleaseTag}})
 	if err != nil {
 		t.Fatalf("latestStableRelease() error = %v", err)
 	}
@@ -121,8 +145,8 @@ func TestLatestStableReleaseNoUpdate(t *testing.T) {
 		t.Fatal("latestStableRelease() shouldUpdate = true, want false")
 	}
 
-	if got.TagName != "v1.6.0" {
-		t.Fatalf("latestStableRelease() tag = %q, want %q", got.TagName, "v1.6.0")
+	if got.TagName != stableReleaseTag {
+		t.Fatalf("latestStableRelease() tag = %q, want %q", got.TagName, stableReleaseTag)
 	}
 }
 
@@ -148,8 +172,8 @@ func TestFetchReleases(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/Exohayvan/Continuum/releases" {
-			t.Fatalf("path = %q, want %q", r.URL.Path, "/repos/Exohayvan/Continuum/releases")
+		if r.URL.Path != releasesAPIPath {
+			t.Fatalf("path = %q, want %q", r.URL.Path, releasesAPIPath)
 		}
 		if got := r.Header.Get("User-Agent"); got != "continuum-updater" {
 			t.Fatalf("User-Agent = %q, want %q", got, "continuum-updater")
@@ -224,22 +248,22 @@ func TestDownloadReleaseAsset(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "release-asset")
+		fmt.Fprint(w, releaseAssetContents)
 	}))
 	defer server.Close()
 
-	path := filepath.Join(t.TempDir(), "asset.tar.gz")
+	path := filepath.Join(t.TempDir(), assetArchiveName)
 	if err := downloadReleaseAsset(context.Background(), server.Client(), server.URL, path); err != nil {
 		t.Fatalf("downloadReleaseAsset() error = %v", err)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf(readFileErrorFormat, err)
 	}
 
-	if string(data) != "release-asset" {
-		t.Fatalf("downloadReleaseAsset() = %q, want %q", string(data), "release-asset")
+	if string(data) != releaseAssetContents {
+		t.Fatalf("downloadReleaseAsset() = %q, want %q", string(data), releaseAssetContents)
 	}
 }
 
@@ -251,7 +275,7 @@ func TestDownloadReleaseAssetStatusError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := downloadReleaseAsset(context.Background(), server.Client(), server.URL, filepath.Join(t.TempDir(), "asset.tar.gz"))
+	err := downloadReleaseAsset(context.Background(), server.Client(), server.URL, filepath.Join(t.TempDir(), assetArchiveName))
 	if err == nil {
 		t.Fatal("downloadReleaseAsset() error = nil, want status failure")
 	}
@@ -260,7 +284,7 @@ func TestDownloadReleaseAssetStatusError(t *testing.T) {
 func TestDownloadReleaseAssetInvalidURL(t *testing.T) {
 	t.Parallel()
 
-	err := downloadReleaseAsset(context.Background(), &http.Client{Timeout: time.Second}, ":", filepath.Join(t.TempDir(), "asset.tar.gz"))
+	err := downloadReleaseAsset(context.Background(), &http.Client{Timeout: time.Second}, ":", filepath.Join(t.TempDir(), assetArchiveName))
 	if err == nil {
 		t.Fatal("downloadReleaseAsset() error = nil, want request failure")
 	}
@@ -275,7 +299,7 @@ func TestDownloadReleaseAssetClientError(t *testing.T) {
 		}),
 	}
 
-	err := downloadReleaseAsset(context.Background(), client, "https://example.test/asset", filepath.Join(t.TempDir(), "asset.tar.gz"))
+	err := downloadReleaseAsset(context.Background(), client, "https://example.test/asset", filepath.Join(t.TempDir(), assetArchiveName))
 	if err == nil {
 		t.Fatal("downloadReleaseAsset() error = nil, want client failure")
 	}
@@ -298,12 +322,12 @@ func TestDownloadReleaseAssetOpenError(t *testing.T) {
 func TestExtractTarGz(t *testing.T) {
 	t.Parallel()
 
-	archive := filepath.Join(t.TempDir(), "archive.tar.gz")
+	archive := filepath.Join(t.TempDir(), archiveFileName)
 	if err := writeTarGz(archive, map[string]string{
 		"Continuum":                "binary",
 		"Continuum.app/Info.plist": "plist",
 	}); err != nil {
-		t.Fatalf("writeTarGz() error = %v", err)
+		t.Fatalf(writeTarGzErrorFormat, err)
 	}
 
 	destination := filepath.Join(t.TempDir(), "extract")
@@ -313,7 +337,7 @@ func TestExtractTarGz(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(destination, "Continuum"))
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf(readFileErrorFormat, err)
 	}
 
 	if string(data) != "binary" {
@@ -324,9 +348,9 @@ func TestExtractTarGz(t *testing.T) {
 func TestExtractTarGzInvalidArchive(t *testing.T) {
 	t.Parallel()
 
-	archive := filepath.Join(t.TempDir(), "archive.tar.gz")
+	archive := filepath.Join(t.TempDir(), archiveFileName)
 	if err := os.WriteFile(archive, []byte("not-gzip"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	if err := extractTarGz(archive, filepath.Join(t.TempDir(), "extract")); err == nil {
@@ -337,7 +361,7 @@ func TestExtractTarGzInvalidArchive(t *testing.T) {
 func TestExtractTarGzInvalidTarStream(t *testing.T) {
 	t.Parallel()
 
-	archive := filepath.Join(t.TempDir(), "archive.tar.gz")
+	archive := filepath.Join(t.TempDir(), archiveFileName)
 	file, err := os.Create(archive)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -348,10 +372,10 @@ func TestExtractTarGzInvalidTarStream(t *testing.T) {
 		t.Fatalf("Write() error = %v", err)
 	}
 	if err := gzipWriter.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if err := file.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 
 	if err := extractTarGz(archive, filepath.Join(t.TempDir(), "extract")); err == nil {
@@ -370,7 +394,7 @@ func TestExtractTarGzMissingArchive(t *testing.T) {
 func TestExtractTarGzDirectoryEntry(t *testing.T) {
 	t.Parallel()
 
-	archive := filepath.Join(t.TempDir(), "archive.tar.gz")
+	archive := filepath.Join(t.TempDir(), archiveFileName)
 	file, err := os.Create(archive)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -389,13 +413,13 @@ func TestExtractTarGzDirectoryEntry(t *testing.T) {
 		t.Fatalf("Write() error = %v", err)
 	}
 	if err := tarWriter.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if err := gzipWriter.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if err := file.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 
 	destination := filepath.Join(t.TempDir(), "extract")
@@ -411,11 +435,11 @@ func TestExtractTarGzDirectoryEntry(t *testing.T) {
 func TestExtractTarGzRejectsTraversal(t *testing.T) {
 	t.Parallel()
 
-	archive := filepath.Join(t.TempDir(), "archive.tar.gz")
+	archive := filepath.Join(t.TempDir(), archiveFileName)
 	if err := writeTarGz(archive, map[string]string{
 		"../escape": "bad",
 	}); err != nil {
-		t.Fatalf("writeTarGz() error = %v", err)
+		t.Fatalf(writeTarGzErrorFormat, err)
 	}
 
 	err := extractTarGz(archive, filepath.Join(t.TempDir(), "extract"))
@@ -427,13 +451,13 @@ func TestExtractTarGzRejectsTraversal(t *testing.T) {
 func TestArchiveTargetDestinationRoot(t *testing.T) {
 	t.Parallel()
 
-	got, err := archiveTarget("/tmp/continuum", ".")
+	got, err := archiveTarget(tmpContinuumDir, ".")
 	if err != nil {
 		t.Fatalf("archiveTarget() error = %v", err)
 	}
 
-	if got != filepath.Clean("/tmp/continuum") {
-		t.Fatalf("archiveTarget() = %q, want %q", got, filepath.Clean("/tmp/continuum"))
+	if got != filepath.Clean(tmpContinuumDir) {
+		t.Fatalf("archiveTarget() = %q, want %q", got, filepath.Clean(tmpContinuumDir))
 	}
 }
 
@@ -443,7 +467,7 @@ func TestFindPathByName(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "nested", AppName+".app")
 	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 
 	got, err := findPathByName(root, AppName+".app", true)
@@ -490,7 +514,7 @@ func TestAppBundleRoot(t *testing.T) {
 func TestAppBundleRootMissing(t *testing.T) {
 	t.Parallel()
 
-	_, err := appBundleRoot("/tmp/Continuum")
+	_, err := appBundleRoot(tmpContinuumBinary)
 	if err == nil {
 		t.Fatal("appBundleRoot() error = nil, want failure")
 	}
@@ -504,13 +528,13 @@ func TestReplaceUnixBinary(t *testing.T) {
 	replacement := filepath.Join(root, "replacement", "Continuum")
 
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(replacement), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(replacement, []byte("new"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	got, err := replaceUnixBinary(current, replacement)
@@ -524,7 +548,7 @@ func TestReplaceUnixBinary(t *testing.T) {
 
 	data, err := os.ReadFile(current)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf(readFileErrorFormat, err)
 	}
 
 	if string(data) != "new" {
@@ -540,20 +564,20 @@ func TestReplaceUnixBinaryRenameFailure(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
 
-	renamePath = func(string, string) error { return fmt.Errorf("rename failed") }
+	renamePath = func(string, string) error { return fmt.Errorf(renameFailedError) }
 
 	root := t.TempDir()
 	current := filepath.Join(root, "Continuum")
 	replacement := filepath.Join(root, "replacement", "Continuum")
 
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(replacement), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(replacement, []byte("new"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	if _, err := replaceUnixBinary(current, replacement); err == nil {
@@ -582,13 +606,13 @@ func TestReplaceUnixBinaryChmodFailure(t *testing.T) {
 	replacement := filepath.Join(root, "replacement", "Continuum")
 
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(replacement), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(replacement, []byte("new"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	if _, err := replaceUnixBinary(current, replacement); err == nil {
@@ -606,16 +630,16 @@ func TestReplaceAppBundle(t *testing.T) {
 	replacementExec := filepath.Join(replacementBundle, "Contents", "MacOS", AppName)
 
 	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	got, err := replaceAppBundle(currentExec, replacementBundle)
@@ -629,7 +653,7 @@ func TestReplaceAppBundle(t *testing.T) {
 
 	data, err := os.ReadFile(currentExec)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf(readFileErrorFormat, err)
 	}
 
 	if string(data) != "new" {
@@ -649,7 +673,7 @@ func TestReplaceAppBundleFailure(t *testing.T) {
 	renamePath = func(oldPath string, newPath string) error {
 		renameCalls++
 		if renameCalls == 2 {
-			return fmt.Errorf("rename failed")
+			return fmt.Errorf(renameFailedError)
 		}
 		return os.Rename(oldPath, newPath)
 	}
@@ -661,16 +685,16 @@ func TestReplaceAppBundleFailure(t *testing.T) {
 	replacementExec := filepath.Join(replacementBundle, "Contents", "MacOS", AppName)
 
 	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	if _, err := replaceAppBundle(currentExec, replacementBundle); err == nil {
@@ -683,7 +707,7 @@ func TestReplaceAppBundleInitialRenameFailure(t *testing.T) {
 	defer restore()
 
 	renamePath = func(string, string) error {
-		return fmt.Errorf("rename failed")
+		return fmt.Errorf(renameFailedError)
 	}
 
 	currentExec := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
@@ -695,7 +719,7 @@ func TestReplaceAppBundleInitialRenameFailure(t *testing.T) {
 func TestReplaceAppBundleInvalidExecutable(t *testing.T) {
 	t.Parallel()
 
-	if _, err := replaceAppBundle("/tmp/Continuum", "/tmp/download/Continuum.app"); err == nil {
+	if _, err := replaceAppBundle(tmpContinuumBinary, "/tmp/download/Continuum.app"); err == nil {
 		t.Fatal("replaceAppBundle() error = nil, want invalid bundle failure")
 	}
 }
@@ -703,8 +727,8 @@ func TestReplaceAppBundleInvalidExecutable(t *testing.T) {
 func TestWindowsUpdateScript(t *testing.T) {
 	t.Parallel()
 
-	script := windowsUpdateScript(`C:\Apps\Continuum.exe`, `C:\Temp\Continuum.exe`)
-	if !strings.Contains(script, `set "CURRENT=C:\Apps\Continuum.exe"`) {
+	script := windowsUpdateScript(`C:\Apps\`+windowsBinaryName, `C:\Temp\`+windowsBinaryName)
+	if !strings.Contains(script, `set "CURRENT=C:\Apps\`+windowsBinaryName+`"`) {
 		t.Fatalf("windowsUpdateScript() missing current path: %q", script)
 	}
 
@@ -721,11 +745,11 @@ func TestScheduleWindowsReplacement(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 
 	tempDir := t.TempDir()
-	current := filepath.Join(tempDir, "Continuum.exe")
-	replacement := filepath.Join(tempDir, "download", "Continuum.exe")
+	current := filepath.Join(tempDir, windowsBinaryName)
+	replacement := filepath.Join(tempDir, "download", windowsBinaryName)
 
 	if err := os.MkdirAll(filepath.Dir(replacement), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 
 	called := false
@@ -733,7 +757,7 @@ func TestScheduleWindowsReplacement(t *testing.T) {
 		called = true
 
 		if name != "cmd" {
-			t.Fatalf("process = %q, want %q", name, "cmd")
+			t.Fatalf(processMismatchFormat, name, "cmd")
 		}
 		if len(argv) != 3 || argv[2] == "" {
 			t.Fatalf("argv = %v, want cmd /C <script>", argv)
@@ -763,7 +787,7 @@ func TestScheduleWindowsReplacementWriteError(t *testing.T) {
 		return fmt.Errorf("write failed")
 	}
 
-	if err := scheduleWindowsReplacement(`C:\Apps\Continuum.exe`, `C:\Temp\Continuum.exe`); err == nil {
+	if err := scheduleWindowsReplacement(`C:\Apps\`+windowsBinaryName, `C:\Temp\`+windowsBinaryName); err == nil {
 		t.Fatal("scheduleWindowsReplacement() error = nil, want write failure")
 	}
 }
@@ -776,7 +800,7 @@ func TestScheduleWindowsReplacementStartError(t *testing.T) {
 		return nil, fmt.Errorf("start failed")
 	}
 
-	if err := scheduleWindowsReplacement(`C:\Apps\Continuum.exe`, `C:\Temp\Continuum.exe`); err == nil {
+	if err := scheduleWindowsReplacement(`C:\Apps\`+windowsBinaryName, `C:\Temp\`+windowsBinaryName); err == nil {
 		t.Fatal("scheduleWindowsReplacement() error = nil, want start failure")
 	}
 }
@@ -788,8 +812,8 @@ func TestRelaunchBinary(t *testing.T) {
 	startOSProcess = func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 		called = true
 
-		if name != "/tmp/Continuum" {
-			t.Fatalf("process = %q, want %q", name, "/tmp/Continuum")
+		if name != tmpContinuumBinary {
+			t.Fatalf(processMismatchFormat, name, tmpContinuumBinary)
 		}
 		if attr == nil || attr.Dir != "/tmp" {
 			t.Fatalf("Dir = %q, want %q", attr.Dir, "/tmp")
@@ -798,7 +822,7 @@ func TestRelaunchBinary(t *testing.T) {
 		return os.FindProcess(os.Getpid())
 	}
 
-	if err := relaunchBinary("/tmp/Continuum"); err != nil {
+	if err := relaunchBinary(tmpContinuumBinary); err != nil {
 		t.Fatalf("relaunchBinary() error = %v", err)
 	}
 
@@ -816,7 +840,7 @@ func TestRelaunchBinaryError(t *testing.T) {
 		return nil, fmt.Errorf("start failed")
 	}
 
-	if err := relaunchBinary("/tmp/Continuum"); err == nil {
+	if err := relaunchBinary(tmpContinuumBinary); err == nil {
 		t.Fatal("relaunchBinary() error = nil, want start failure")
 	}
 }
@@ -887,15 +911,7 @@ func TestCheckStatusReportsUpdateRequirement(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "1.5.0")
-	if got.CurrentVersion != "1.5.0" {
-		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "1.5.0")
-	}
-	if got.RemoteVersion != "v1.6.0" {
-		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "v1.6.0")
-	}
-	if !got.UpdateRequired {
-		t.Fatal("checkStatus().UpdateRequired = false, want true")
-	}
+	assertCheckStatus(t, got, "1.5.0", stableReleaseTag, true)
 }
 
 func TestCheckStatusSkipsUpdateWhenVersionsMatch(t *testing.T) {
@@ -903,7 +919,7 @@ func TestCheckStatusSkipsUpdateWhenVersionsMatch(t *testing.T) {
 	defer restore()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[{"tag_name":"v2.0.0","prerelease":false,"assets":[]}]`)
+		fmt.Fprint(w, singleReleaseJSON(stableReleaseTagV200))
 	}))
 	defer server.Close()
 
@@ -911,15 +927,7 @@ func TestCheckStatusSkipsUpdateWhenVersionsMatch(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "2.0.0")
-	if got.CurrentVersion != "2.0.0" {
-		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "2.0.0")
-	}
-	if got.RemoteVersion != "v2.0.0" {
-		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "v2.0.0")
-	}
-	if got.UpdateRequired {
-		t.Fatal("checkStatus().UpdateRequired = true, want false")
-	}
+	assertCheckStatus(t, got, "2.0.0", stableReleaseTagV200, false)
 }
 
 func TestCheckStatusSkipsUpdateWhenCurrentIsNewer(t *testing.T) {
@@ -927,7 +935,7 @@ func TestCheckStatusSkipsUpdateWhenCurrentIsNewer(t *testing.T) {
 	defer restore()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[{"tag_name":"v2.0.0","prerelease":false,"assets":[]}]`)
+		fmt.Fprint(w, singleReleaseJSON(stableReleaseTagV200))
 	}))
 	defer server.Close()
 
@@ -935,15 +943,7 @@ func TestCheckStatusSkipsUpdateWhenCurrentIsNewer(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "2.0.1")
-	if got.CurrentVersion != "2.0.1" {
-		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "2.0.1")
-	}
-	if got.RemoteVersion != "v2.0.0" {
-		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "v2.0.0")
-	}
-	if got.UpdateRequired {
-		t.Fatal("checkStatus().UpdateRequired = true, want false")
-	}
+	assertCheckStatus(t, got, "2.0.1", stableReleaseTagV200, false)
 }
 
 func TestCheckStatusHandlesUnavailableRemote(t *testing.T) {
@@ -953,12 +953,7 @@ func TestCheckStatusHandlesUnavailableRemote(t *testing.T) {
 	apiBaseURL = ":"
 
 	got := checkStatus(context.Background(), "1.5.0")
-	if got.RemoteVersion != "unavailable" {
-		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "unavailable")
-	}
-	if got.UpdateRequired {
-		t.Fatal("checkStatus().UpdateRequired = true, want false")
-	}
+	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false)
 }
 
 func TestCheckStatusSkipsInvalidCurrentVersion(t *testing.T) {
@@ -966,15 +961,7 @@ func TestCheckStatusSkipsInvalidCurrentVersion(t *testing.T) {
 	defer restore()
 
 	got := checkStatus(context.Background(), "dev")
-	if got.CurrentVersion != "dev" {
-		t.Fatalf("checkStatus().CurrentVersion = %q, want %q", got.CurrentVersion, "dev")
-	}
-	if got.RemoteVersion != "unavailable" {
-		t.Fatalf("checkStatus().RemoteVersion = %q, want %q", got.RemoteVersion, "unavailable")
-	}
-	if got.UpdateRequired {
-		t.Fatal("checkStatus().UpdateRequired = true, want false")
-	}
+	assertCheckStatus(t, got, "dev", unavailableRemote, false)
 }
 
 func TestRemoteVersionFetchesAndCachesLatest(t *testing.T) {
@@ -989,14 +976,14 @@ func TestRemoteVersionFetchesAndCachesLatest(t *testing.T) {
 	apiBaseURL = server.URL
 	httpClient = server.Client()
 
-	if got := RemoteVersion(); got != "v1.6.0" {
-		t.Fatalf("RemoteVersion() = %q, want %q", got, "v1.6.0")
+	if got := RemoteVersion(); got != stableReleaseTag {
+		t.Fatalf("RemoteVersion() = %q, want %q", got, stableReleaseTag)
 	}
 
 	apiBaseURL = ":"
 
-	if got := RemoteVersion(); got != "v1.6.0" {
-		t.Fatalf("RemoteVersion() cached = %q, want %q", got, "v1.6.0")
+	if got := RemoteVersion(); got != stableReleaseTag {
+		t.Fatalf("RemoteVersion() cached = %q, want %q", got, stableReleaseTag)
 	}
 }
 
@@ -1006,8 +993,8 @@ func TestRemoteVersionUnavailableOnFetchError(t *testing.T) {
 
 	apiBaseURL = ":"
 
-	if got := RemoteVersion(); got != "unavailable" {
-		t.Fatalf("RemoteVersion() = %q, want %q", got, "unavailable")
+	if got := RemoteVersion(); got != unavailableRemote {
+		t.Fatalf("RemoteVersion() = %q, want %q", got, unavailableRemote)
 	}
 }
 
@@ -1057,10 +1044,10 @@ func TestCheckAndApplyUnix(t *testing.T) {
 	root := t.TempDir()
 	current := filepath.Join(root, "Continuum")
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
-	assetName := buildAssetName("v1.6.0", "linux", "amd64")
+	assetName := buildAssetName(stableReleaseTag, "linux", "amd64")
 	server := releaseServer(t, assetName, map[string]string{
 		"Continuum": "new",
 	})
@@ -1074,7 +1061,7 @@ func TestCheckAndApplyUnix(t *testing.T) {
 	startOSProcess = func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 		launched = true
 		if name != current {
-			t.Fatalf("process = %q, want %q", name, current)
+			t.Fatalf(processMismatchFormat, name, current)
 		}
 		return os.FindProcess(os.Getpid())
 	}
@@ -1089,7 +1076,7 @@ func TestCheckAndApplyUnix(t *testing.T) {
 
 	data, err := os.ReadFile(current)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf(readFileErrorFormat, err)
 	}
 
 	if string(data) != "new" {
@@ -1130,7 +1117,7 @@ func TestCheckAndApplyMissingAsset(t *testing.T) {
 	defer restore()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[{"tag_name":"v1.6.0","prerelease":false,"assets":[]}]`)
+		fmt.Fprint(w, singleReleaseJSON(stableReleaseTag))
 	}))
 	defer server.Close()
 
@@ -1149,9 +1136,10 @@ func TestCheckAndApplyDownloadError(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/Exohayvan/Continuum/releases":
-			fmt.Fprintf(w, `[{"tag_name":"v1.6.0","prerelease":false,"assets":[{"name":%q,"browser_download_url":%q}]}]`,
-				buildAssetName("v1.6.0", "linux", "amd64"),
+		case releasesAPIPath:
+			fmt.Fprintf(w, `[{"tag_name":%q,"prerelease":false,"assets":[{"name":%q,"browser_download_url":%q}]}]`,
+				stableReleaseTag,
+				buildAssetName(stableReleaseTag, "linux", "amd64"),
 				server.URL+"/download",
 			)
 		default:
@@ -1173,14 +1161,14 @@ func TestCheckAndApplyWindows(t *testing.T) {
 	defer restore()
 
 	root := t.TempDir()
-	current := filepath.Join(root, "Continuum.exe")
+	current := filepath.Join(root, windowsBinaryName)
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
-	assetName := buildAssetName("v1.6.0", "windows", "amd64")
+	assetName := buildAssetName(stableReleaseTag, "windows", "amd64")
 	server := releaseServer(t, assetName, map[string]string{
-		"Continuum.exe": "new",
+		windowsBinaryName: "new",
 	})
 	defer server.Close()
 
@@ -1192,7 +1180,7 @@ func TestCheckAndApplyWindows(t *testing.T) {
 	startOSProcess = func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 		started = true
 		if name != "cmd" {
-			t.Fatalf("process = %q, want %q", name, "cmd")
+			t.Fatalf(processMismatchFormat, name, "cmd")
 		}
 		return os.FindProcess(os.Getpid())
 	}
@@ -1215,16 +1203,16 @@ func TestApplyExtractedUpdateDarwin(t *testing.T) {
 	replacementExec := filepath.Join(root, "extract", AppName+".app", "Contents", "MacOS", AppName)
 
 	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(mkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	currentExecutable = func() (string, error) { return currentExec, nil }
@@ -1260,7 +1248,7 @@ func TestApplyExtractedUpdateMissingReplacement(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
 
-	currentExecutable = func() (string, error) { return "/tmp/Continuum", nil }
+	currentExecutable = func() (string, error) { return tmpContinuumBinary, nil }
 
 	if _, _, err := applyExtractedUpdate("linux", t.TempDir()); err == nil {
 		t.Fatal("applyExtractedUpdate() error = nil, want missing replacement failure")
@@ -1285,7 +1273,6 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalRunCheckAndApply := runCheckAndApply
 	originalNewLoopTicker := newLoopTicker
 	originalCurrentVersion := currentVersion
-	originalStartOnce := startOnce
 	originalLatestRemoteVersion := latestRemoteVersion
 
 	apiBaseURL = "https://api.github.com"
@@ -1324,7 +1311,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 		startAsync = originalStartAsync
 		runCheckAndApply = originalRunCheckAndApply
 		newLoopTicker = originalNewLoopTicker
-		startOnce = originalStartOnce
+		startOnce = sync.Once{}
 		storeRemoteVersion(originalLatestRemoteVersion)
 	}
 }
@@ -1337,7 +1324,9 @@ func (f fakeTicker) Chan() <-chan time.Time {
 	return f.channel
 }
 
-func (f fakeTicker) Stop() {}
+func (f fakeTicker) Stop() {
+	// No-op: tests control ticker shutdown by closing the channel directly.
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -1351,7 +1340,7 @@ func releaseServer(t *testing.T, assetName string, files map[string]string) *htt
 	assetPath := "/download/" + assetName
 	releasePayload := fmt.Sprintf(`[
   {
-    "tag_name": "v1.6.0",
+    "tag_name": %q,
     "prerelease": false,
     "assets": [
       {
@@ -1360,22 +1349,22 @@ func releaseServer(t *testing.T, assetName string, files map[string]string) *htt
       }
     ]
   }
-]`, assetName, "{{BASE_URL}}"+assetPath)
+]`, stableReleaseTag, assetName, "{{BASE_URL}}"+assetPath)
 
 	archive := filepath.Join(t.TempDir(), assetName)
 	if err := writeTarGz(archive, files); err != nil {
-		t.Fatalf("writeTarGz() error = %v", err)
+		t.Fatalf(writeTarGzErrorFormat, err)
 	}
 
 	archiveData, err := os.ReadFile(archive)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf(readFileErrorFormat, err)
 	}
 
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/Exohayvan/Continuum/releases":
+		case releasesAPIPath:
 			payload := strings.ReplaceAll(releasePayload, "{{BASE_URL}}", server.URL)
 			fmt.Fprint(w, payload)
 		case assetPath:
@@ -1386,6 +1375,28 @@ func releaseServer(t *testing.T, assetName string, files map[string]string) *htt
 	}))
 
 	return server
+}
+
+func assertCheckStatus(t *testing.T, got Status, wantCurrent string, wantRemote string, wantUpdateRequired bool) {
+	t.Helper()
+
+	if got.CurrentVersion != wantCurrent {
+		t.Fatalf(checkStatusCurrentFormat, got.CurrentVersion, wantCurrent)
+	}
+	if got.RemoteVersion != wantRemote {
+		t.Fatalf(checkStatusRemoteFormat, got.RemoteVersion, wantRemote)
+	}
+	if got.UpdateRequired == wantUpdateRequired {
+		return
+	}
+	if wantUpdateRequired {
+		t.Fatal("checkStatus().UpdateRequired = false, want true")
+	}
+	t.Fatal(checkStatusUpdateRequiredFalse)
+}
+
+func singleReleaseJSON(tag string) string {
+	return fmt.Sprintf(`[{"tag_name":%q,"prerelease":false,"assets":[]}]`, tag)
 }
 
 func writeTarGz(path string, files map[string]string) error {

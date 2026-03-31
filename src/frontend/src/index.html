@@ -7,19 +7,17 @@
     <link href="/main.css" rel="stylesheet"/>
 </head>
 <body>
-<div class="update-overlay hidden" id="update-overlay">
-    <section class="update-modal" aria-labelledby="update-title" aria-modal="true" role="dialog">
-        <p class="eyebrow">Update Required</p>
-        <h2 id="update-title">A newer Continuum build is available.</h2>
-        <p class="update-copy" id="update-message">
-            Continuum will auto update in 15 seconds.
-        </p>
-        <div class="update-actions">
-            <button id="update-now" type="button">Update Now</button>
-            <button class="button-secondary" id="exit-app" type="button">Exit</button>
-        </div>
-    </section>
-</div>
+<dialog class="update-modal" id="update-dialog" aria-labelledby="update-title">
+    <p class="eyebrow">Update Required</p>
+    <h2 id="update-title">A newer Continuum build is available.</h2>
+    <p class="update-copy" id="update-message">
+        Continuum will auto update in 15 seconds.
+    </p>
+    <div class="update-actions">
+        <button id="update-now" type="button">Update Now</button>
+        <button class="button-secondary" id="exit-app" type="button">Exit</button>
+    </div>
+</dialog>
 <main class="shell">
     <section class="card">
         <p class="eyebrow">Continuum</p>

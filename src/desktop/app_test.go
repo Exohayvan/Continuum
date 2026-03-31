@@ -7,6 +7,12 @@ import (
 	"continuum/src/updater"
 )
 
+const (
+	testNodeID        = "node-123"
+	testVersion       = "1.5.0"
+	testRemoteVersion = "v1.6.0"
+)
+
 func TestNewAppReturnsEmptyBackend(t *testing.T) {
 	app := NewApp()
 	if app == nil {
@@ -23,40 +29,40 @@ func TestStartupAcceptsContext(t *testing.T) {
 
 func TestNodeIDReturnsResolvedValue(t *testing.T) {
 	originalResolveNodeID := resolveNodeID
-	resolveNodeID = func() string { return "node-123" }
+	resolveNodeID = func() string { return testNodeID }
 	t.Cleanup(func() {
 		resolveNodeID = originalResolveNodeID
 	})
 
 	app := NewApp()
-	if got := app.NodeID(); got != "node-123" {
-		t.Fatalf("NodeID() = %q, want %q", got, "node-123")
+	if got := app.NodeID(); got != testNodeID {
+		t.Fatalf("NodeID() = %q, want %q", got, testNodeID)
 	}
 }
 
 func TestVersionReturnsResolvedValue(t *testing.T) {
 	originalResolveVersion := resolveVersion
-	resolveVersion = func() string { return "1.5.0" }
+	resolveVersion = func() string { return testVersion }
 	t.Cleanup(func() {
 		resolveVersion = originalResolveVersion
 	})
 
 	app := NewApp()
-	if got := app.Version(); got != "1.5.0" {
-		t.Fatalf("Version() = %q, want %q", got, "1.5.0")
+	if got := app.Version(); got != testVersion {
+		t.Fatalf("Version() = %q, want %q", got, testVersion)
 	}
 }
 
 func TestRemoteVersionReturnsResolvedValue(t *testing.T) {
 	originalResolveRemoteVersion := resolveRemoteVersion
-	resolveRemoteVersion = func() string { return "v1.6.0" }
+	resolveRemoteVersion = func() string { return testRemoteVersion }
 	t.Cleanup(func() {
 		resolveRemoteVersion = originalResolveRemoteVersion
 	})
 
 	app := NewApp()
-	if got := app.RemoteVersion(); got != "v1.6.0" {
-		t.Fatalf("RemoteVersion() = %q, want %q", got, "v1.6.0")
+	if got := app.RemoteVersion(); got != testRemoteVersion {
+		t.Fatalf("RemoteVersion() = %q, want %q", got, testRemoteVersion)
 	}
 }
 
@@ -64,8 +70,8 @@ func TestUpdateStatusReturnsResolvedValue(t *testing.T) {
 	originalResolveUpdateStatus := resolveUpdateStatus
 	resolveUpdateStatus = func() updater.Status {
 		return updater.Status{
-			CurrentVersion: "1.5.0",
-			RemoteVersion:  "v1.6.0",
+			CurrentVersion: testVersion,
+			RemoteVersion:  testRemoteVersion,
 			UpdateRequired: true,
 		}
 	}
@@ -75,7 +81,7 @@ func TestUpdateStatusReturnsResolvedValue(t *testing.T) {
 
 	app := NewApp()
 	got := app.UpdateStatus()
-	if got.CurrentVersion != "1.5.0" || got.RemoteVersion != "v1.6.0" || !got.UpdateRequired {
+	if got.CurrentVersion != testVersion || got.RemoteVersion != testRemoteVersion || !got.UpdateRequired {
 		t.Fatalf("UpdateStatus() = %#v, want update-required status", got)
 	}
 }

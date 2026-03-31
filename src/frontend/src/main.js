@@ -2,7 +2,7 @@ const nodeIDElement = document.getElementById("nodeid");
 const versionElement = document.getElementById("version");
 const refreshButton = document.getElementById("refresh");
 const statusElement = document.getElementById("status");
-const updateOverlayElement = document.getElementById("update-overlay");
+const updateDialogElement = document.getElementById("update-dialog");
 const updateMessageElement = document.getElementById("update-message");
 const updateNowButton = document.getElementById("update-now");
 const exitAppButton = document.getElementById("exit-app");
@@ -78,7 +78,7 @@ function syncUpdateModal(updateStatus) {
         countdownRemaining = updateCountdownSeconds;
     }
 
-    updateOverlayElement.classList.remove("hidden");
+    showUpdateModal();
     updateNowButton.disabled = false;
     exitAppButton.disabled = false;
     renderUpdateMessage(currentVersion, remoteVersion);
@@ -119,10 +119,34 @@ function clearUpdateCountdown() {
     updateCountdownTimer = null;
 }
 
+function showUpdateModal() {
+    if (updateDialogElement.open) {
+        return;
+    }
+
+    if (typeof updateDialogElement.showModal === "function") {
+        updateDialogElement.showModal();
+        return;
+    }
+
+    updateDialogElement.setAttribute("open", "");
+}
+
 function hideUpdateModal() {
     clearUpdateCountdown();
     pendingUpdateStatus = null;
-    updateOverlayElement.classList.add("hidden");
+
+    if (!updateDialogElement.open) {
+        updateDialogElement.removeAttribute("open");
+        return;
+    }
+
+    if (typeof updateDialogElement.close === "function") {
+        updateDialogElement.close();
+        return;
+    }
+
+    updateDialogElement.removeAttribute("open");
 }
 
 async function triggerUpdateNow() {
@@ -172,6 +196,9 @@ updateNowButton.addEventListener("click", () => {
 });
 exitAppButton.addEventListener("click", () => {
     void exitApplication();
+});
+updateDialogElement.addEventListener("cancel", (event) => {
+    event.preventDefault();
 });
 await loadShellState();
 startUpdateChecks();

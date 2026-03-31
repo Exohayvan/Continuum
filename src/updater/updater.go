@@ -165,29 +165,13 @@ func checkAndApply(ctx context.Context, current string, goos string, goarch stri
 		return nil
 	}
 
-	releases, err := fetchReleases(ctx, apiBaseURL, httpClient, RepoOwner, RepoName)
+	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(ctx, currentValue, goos, goarch)
 	if err != nil {
 		return err
 	}
-
-	latest, shouldUpdate, err := latestStableRelease(currentValue, releases)
-	if err != nil {
-		if errors.Is(err, errNoStableRelease) {
-			return nil
-		}
-		return err
-	}
-
-	storeRemoteVersion(latest.TagName)
 
 	if !shouldUpdate {
 		return nil
-	}
-
-	assetName := buildAssetName(latest.TagName, goos, goarch)
-	assetURL, err := findAssetURL(latest, assetName)
-	if err != nil {
-		return err
 	}
 
 	workDir, err := createTempDir("", "continuum-update-*")
@@ -231,6 +215,35 @@ func checkAndApply(ctx context.Context, current string, goos string, goarch stri
 	}
 
 	return nil
+}
+
+func resolveUpdateAsset(ctx context.Context, current version.Value, goos string, goarch string) (string, string, bool, error) {
+	releases, err := fetchReleases(ctx, apiBaseURL, httpClient, RepoOwner, RepoName)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	latest, shouldUpdate, err := latestStableRelease(current, releases)
+	if err != nil {
+		if errors.Is(err, errNoStableRelease) {
+			return "", "", false, nil
+		}
+
+		return "", "", false, err
+	}
+
+	storeRemoteVersion(latest.TagName)
+	if !shouldUpdate {
+		return "", "", false, nil
+	}
+
+	assetName := buildAssetName(latest.TagName, goos, goarch)
+	assetURL, err := findAssetURL(latest, assetName)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	return assetName, assetURL, true, nil
 }
 
 func fetchReleases(ctx context.Context, baseURL string, client *http.Client, owner string, repo string) ([]Release, error) {
@@ -398,43 +411,55 @@ func extractTarGz(archivePath string, destination string) error {
 
 	for {
 		header, err := tarReader.Next()
-		if errors.Is(err, io.EOF) {
+		if isTarEOF(err) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
 
-		targetPath, err := archiveTarget(destination, header.Name)
-		if err != nil {
+		if err := extractTarEntry(tarReader, destination, header); err != nil {
 			return err
 		}
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := createDirs(targetPath, header.FileInfo().Mode()); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			if err := createDirs(filepath.Dir(targetPath), 0o755); err != nil {
-				return err
-			}
-
-			out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, header.FileInfo().Mode())
-			if err != nil {
-				return err
-			}
-
-			if _, err := io.Copy(out, tarReader); err != nil {
-				out.Close()
-				return err
-			}
-
-			if err := out.Close(); err != nil {
-				return err
-			}
-		}
 	}
+}
+
+func isTarEOF(err error) bool {
+	return errors.Is(err, io.EOF)
+}
+
+func extractTarEntry(tarReader *tar.Reader, destination string, header *tar.Header) error {
+	targetPath, err := archiveTarget(destination, header.Name)
+	if err != nil {
+		return err
+	}
+
+	switch header.Typeflag {
+	case tar.TypeDir:
+		return createDirs(targetPath, header.FileInfo().Mode())
+	case tar.TypeReg:
+		return writeTarFile(tarReader, targetPath, header.FileInfo().Mode())
+	default:
+		return nil
+	}
+}
+
+func writeTarFile(tarReader *tar.Reader, targetPath string, mode os.FileMode) error {
+	if err := createDirs(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(out, tarReader); err != nil {
+		out.Close()
+		return err
+	}
+
+	return out.Close()
 }
 
 func archiveTarget(destination string, entryName string) (string, error) {
