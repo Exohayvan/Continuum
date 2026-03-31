@@ -1418,6 +1418,23 @@ func TestResolveUpdateAssetNoUpdateWhenCurrentMatchesLatest(t *testing.T) {
 	}
 }
 
+func TestResolveUpdateAssetMissingAsset(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, singleReleaseJSON(stableReleaseTag))
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	if _, _, _, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 5, Patch: 0}, "linux", "amd64"); err == nil {
+		t.Fatal("resolveUpdateAsset() error = nil, want missing asset failure")
+	}
+}
+
 func TestCheckAndApplyFetchError(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
