@@ -16,13 +16,15 @@ var (
 	resolveRemoteVersion = updater.RemoteVersion
 	resolveUpdateStatus  = updater.CheckStatus
 	runUpdateNow         = updater.CheckAndApply
+	runtimeQuit          = wailsruntime.Quit
+	exitProcess          = os.Exit
 	quitApplication      = func(ctx context.Context) {
 		if ctx != nil {
-			wailsruntime.Quit(ctx)
+			runtimeQuit(ctx)
 			return
 		}
 
-		os.Exit(0)
+		exitProcess(0)
 	}
 )
 

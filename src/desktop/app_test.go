@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"continuum/src/updater"
@@ -38,6 +39,59 @@ func TestStartupAcceptsContext(t *testing.T) {
 
 	if received != ctx {
 		t.Fatal("Startup() did not wire quit handler with the provided context")
+	}
+}
+
+func TestQuitApplicationUsesWailsRuntimeWhenContextExists(t *testing.T) {
+	originalRuntimeQuit := runtimeQuit
+	originalExitProcess := exitProcess
+	ctx := context.WithValue(context.Background(), testContextKey("suite"), "continuum")
+	received := context.Context(nil)
+	exitCode := -1
+	runtimeQuit = func(got context.Context) {
+		received = got
+	}
+	exitProcess = func(code int) {
+		exitCode = code
+	}
+	t.Cleanup(func() {
+		runtimeQuit = originalRuntimeQuit
+		exitProcess = originalExitProcess
+	})
+
+	quitApplication(ctx)
+
+	if received != ctx {
+		t.Fatal("quitApplication() did not pass the context to the runtime quit path")
+	}
+	if exitCode != -1 {
+		t.Fatalf("quitApplication() exit code = %d, want no exit", exitCode)
+	}
+}
+
+func TestQuitApplicationFallsBackToExitProcessWithoutContext(t *testing.T) {
+	originalRuntimeQuit := runtimeQuit
+	originalExitProcess := exitProcess
+	calledRuntimeQuit := false
+	exitCode := -1
+	runtimeQuit = func(context.Context) {
+		calledRuntimeQuit = true
+	}
+	exitProcess = func(code int) {
+		exitCode = code
+	}
+	t.Cleanup(func() {
+		runtimeQuit = originalRuntimeQuit
+		exitProcess = originalExitProcess
+	})
+
+	quitApplication(nil)
+
+	if calledRuntimeQuit {
+		t.Fatal("quitApplication() called runtime quit for nil context")
+	}
+	if exitCode != 0 {
+		t.Fatalf("quitApplication() exit code = %d, want %d", exitCode, 0)
 	}
 }
 
@@ -131,6 +185,32 @@ func TestUpdateNowRunsUpdater(t *testing.T) {
 	}
 }
 
+func TestUpdateNowReturnsUpdaterError(t *testing.T) {
+	originalRunUpdateNow := runUpdateNow
+	originalQuitApplication := quitApplication
+	wantErr := errors.New("update failed")
+	quitCalled := false
+	runUpdateNow = func() error {
+		return wantErr
+	}
+	quitApplication = func(context.Context) {
+		quitCalled = true
+	}
+	t.Cleanup(func() {
+		runUpdateNow = originalRunUpdateNow
+		quitApplication = originalQuitApplication
+	})
+
+	app := NewApp()
+	err := app.UpdateNow()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("UpdateNow() error = %v, want %v", err, wantErr)
+	}
+	if quitCalled {
+		t.Fatal("UpdateNow() requested quit when the updater failed")
+	}
+}
+
 func TestExitCallsQuitApplication(t *testing.T) {
 	originalQuitApplication := quitApplication
 	quitCalled := false
@@ -146,6 +226,24 @@ func TestExitCallsQuitApplication(t *testing.T) {
 
 	if !quitCalled {
 		t.Fatal("Exit() did not request graceful quit")
+	}
+}
+
+func TestRequestQuitFallsBackWhenHandlerMissing(t *testing.T) {
+	originalQuitApplication := quitApplication
+	received := context.Context(nil)
+	quitApplication = func(ctx context.Context) {
+		received = ctx
+	}
+	t.Cleanup(func() {
+		quitApplication = originalQuitApplication
+	})
+
+	app := &App{}
+	app.requestQuit()
+
+	if received != nil {
+		t.Fatalf("requestQuit() context = %v, want nil", received)
 	}
 }
 
