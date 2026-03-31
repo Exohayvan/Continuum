@@ -10,25 +10,34 @@ import (
 	"continuum/src/version"
 )
 
+const (
+	messagesFileName     = "messages.txt"
+	fixBootstrapRetry    = "fix bootstrap retry"
+	writeFileErrFormat   = "WriteFile() error = %v"
+	messagesFileFlag     = "-messages-file"
+	bumpedPatchOutput    = "Bumped patch version to 1.2.4\n"
+	stdoutMismatchFormat = "stdout = %q, want %q"
+)
+
 func TestRun(t *testing.T) {
 	restore := stubVersionBumpIO(t)
 
 	var stdout bytes.Buffer
 	stdoutWriter = &stdout
 
-	path := filepath.Join(t.TempDir(), "messages.txt")
-	if err := os.WriteFile(path, []byte("fix bootstrap retry"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	path := filepath.Join(t.TempDir(), messagesFileName)
+	if err := os.WriteFile(path, []byte(fixBootstrapRetry), 0o644); err != nil {
+		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	err := run([]string{"-file", versionPath(t), "-messages-file", path})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path})
 	restore()
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
 
-	if got := stdout.String(); got != "Bumped patch version to 1.2.4\n" {
-		t.Fatalf("stdout = %q, want %q", got, "Bumped patch version to 1.2.4\n")
+	if got := stdout.String(); got != bumpedPatchOutput {
+		t.Fatalf(stdoutMismatchFormat, got, bumpedPatchOutput)
 	}
 }
 
@@ -38,12 +47,12 @@ func TestRunNoChange(t *testing.T) {
 	var stdout bytes.Buffer
 	stdoutWriter = &stdout
 
-	path := filepath.Join(t.TempDir(), "messages.txt")
+	path := filepath.Join(t.TempDir(), messagesFileName)
 	if err := os.WriteFile(path, []byte("docs cleanup"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	err := run([]string{"-file", versionPath(t), "-messages-file", path})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path})
 	restore()
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
@@ -70,7 +79,7 @@ func TestRunReadFileError(t *testing.T) {
 	restore := stubVersionBumpIO(t)
 	readFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
 
-	err := run([]string{"-file", versionPath(t), "-messages-file", "messages.txt"})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, messagesFileName})
 	restore()
 	if err == nil {
 		t.Fatal("run() error = nil, want read failure")
@@ -83,12 +92,12 @@ func TestRunBumpVersionFileError(t *testing.T) {
 		return version.Value{}, version.BumpNone, false, errors.New("write failed")
 	}
 
-	path := filepath.Join(t.TempDir(), "messages.txt")
+	path := filepath.Join(t.TempDir(), messagesFileName)
 	if err := os.WriteFile(path, []byte("fix retry"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	err := run([]string{"-file", versionPath(t), "-messages-file", path})
+	err := run([]string{"-file", versionPath(t), messagesFileFlag, path})
 	restore()
 	if err == nil {
 		t.Fatal("run() error = nil, want version bump failure")
@@ -134,17 +143,17 @@ func TestMainSucceedsWithoutExit(t *testing.T) {
 	exitCode := 0
 	exitFunc = func(code int) { exitCode = code }
 
-	path := filepath.Join(t.TempDir(), "messages.txt")
-	if err := os.WriteFile(path, []byte("fix bootstrap retry"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	path := filepath.Join(t.TempDir(), messagesFileName)
+	if err := os.WriteFile(path, []byte(fixBootstrapRetry), 0o644); err != nil {
+		t.Fatalf(writeFileErrFormat, err)
 	}
 
-	os.Args = []string{"versionbump", "-file", versionPath(t), "-messages-file", path}
+	os.Args = []string{"versionbump", "-file", versionPath(t), messagesFileFlag, path}
 
 	main()
 
-	if got := stdout.String(); got != "Bumped patch version to 1.2.4\n" {
-		t.Fatalf("stdout = %q, want %q", got, "Bumped patch version to 1.2.4\n")
+	if got := stdout.String(); got != bumpedPatchOutput {
+		t.Fatalf(stdoutMismatchFormat, got, bumpedPatchOutput)
 	}
 
 	if exitCode != 0 {
@@ -163,7 +172,7 @@ func stubVersionBumpIO(t *testing.T) func() {
 	readFile = os.ReadFile
 	bumpVersionFile = func(_ string, messages string) (version.Value, version.Bump, bool, error) {
 		switch messages {
-		case "fix bootstrap retry":
+		case fixBootstrapRetry:
 			return version.Value{Major: 1, Minor: 2, Patch: 4}, version.BumpPatch, true, nil
 		case "docs cleanup":
 			return version.Value{Major: 1, Minor: 2, Patch: 3}, version.BumpNone, false, nil

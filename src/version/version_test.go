@@ -13,6 +13,12 @@ minor: 1
 patch: 0
 `
 
+const (
+	versionFileName   = "version.yaml"
+	writeFileFormat   = "WriteFile() error = %v"
+	fixStartupMessage = "fix startup"
+)
+
 func TestDetectBump(t *testing.T) {
 	t.Parallel()
 
@@ -189,9 +195,9 @@ func TestMarshal(t *testing.T) {
 func TestBumpFile(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "version.yaml")
+	path := filepath.Join(t.TempDir(), versionFileName)
 	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileFormat, err)
 	}
 
 	got, bump, changed, err := BumpFile(path, "added bootstrap manifest")
@@ -215,9 +221,9 @@ func TestBumpFile(t *testing.T) {
 func TestBumpFileNoChange(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "version.yaml")
+	path := filepath.Join(t.TempDir(), versionFileName)
 	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileFormat, err)
 	}
 
 	got, bump, changed, err := BumpFile(path, "docs cleanup")
@@ -241,7 +247,7 @@ func TestBumpFileNoChange(t *testing.T) {
 func TestBumpFileReadError(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := BumpFile(filepath.Join(t.TempDir(), "missing.yaml"), "fix startup")
+	_, _, _, err := BumpFile(filepath.Join(t.TempDir(), "missing.yaml"), fixStartupMessage)
 	if err == nil {
 		t.Fatal("BumpFile() error = nil, want read failure")
 	}
@@ -250,12 +256,12 @@ func TestBumpFileReadError(t *testing.T) {
 func TestBumpFileParseError(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "version.yaml")
+	path := filepath.Join(t.TempDir(), versionFileName)
 	if err := os.WriteFile(path, []byte("major: x\nminor: 1\npatch: 0\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileFormat, err)
 	}
 
-	_, _, _, err := BumpFile(path, "fix startup")
+	_, _, _, err := BumpFile(path, fixStartupMessage)
 	if err == nil {
 		t.Fatal("BumpFile() error = nil, want parse failure")
 	}
@@ -264,16 +270,16 @@ func TestBumpFileParseError(t *testing.T) {
 func TestBumpFileWriteError(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "version.yaml")
+	path := filepath.Join(t.TempDir(), versionFileName)
 	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileFormat, err)
 	}
 
 	if err := os.Chmod(path, 0o444); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
 	}
 
-	_, _, _, err := BumpFile(path, "fix startup")
+	_, _, _, err := BumpFile(path, fixStartupMessage)
 	if err == nil {
 		t.Fatal("BumpFile() error = nil, want write failure")
 	}

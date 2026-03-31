@@ -10,21 +10,13 @@ func TestNewAppReturnsEmptyBackend(t *testing.T) {
 	if app == nil {
 		t.Fatal("NewApp() = nil, want non-nil")
 	}
-
-	if app.ctx != nil {
-		t.Fatalf("NewApp() ctx = %v, want nil", app.ctx)
-	}
 }
 
-func TestStartupStoresContext(t *testing.T) {
+func TestStartupAcceptsContext(t *testing.T) {
 	app := NewApp()
 	ctx := context.WithValue(context.Background(), testContextKey("suite"), "continuum")
 
 	app.Startup(ctx)
-
-	if app.ctx != ctx {
-		t.Fatal("Startup() did not persist the provided context")
-	}
 }
 
 func TestNodeIDReturnsResolvedValue(t *testing.T) {

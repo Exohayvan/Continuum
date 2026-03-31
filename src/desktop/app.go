@@ -9,18 +9,16 @@ import (
 var resolveNodeID = nodeid.GetNodeID
 
 // App is the Wails application backend.
-type App struct {
-	ctx context.Context
-}
+type App struct{}
 
 // NewApp creates the Wails application backend.
 func NewApp() *App {
 	return &App{}
 }
 
-// Startup stores the Wails runtime context when the application launches.
+// Startup runs when the application launches.
 func (a *App) Startup(ctx context.Context) {
-	a.ctx = ctx
+	_ = ctx
 }
 
 // NodeID returns the machine's deterministic node identifier.

@@ -1,13 +1,14 @@
 const nodeIDElement = document.getElementById("nodeid");
 const refreshButton = document.getElementById("refresh");
 const statusElement = document.getElementById("status");
+const appBridge = globalThis.go.desktop.App;
 
 async function loadNodeID() {
     statusElement.textContent = "Resolving NodeID...";
     refreshButton.disabled = true;
 
     try {
-        const nodeID = await window.go.desktop.App.NodeID();
+        const nodeID = await appBridge.NodeID();
         nodeIDElement.textContent = nodeID;
         statusElement.textContent = "NodeID loaded";
     } catch (error) {
@@ -20,4 +21,4 @@ async function loadNodeID() {
 }
 
 refreshButton.addEventListener("click", loadNodeID);
-loadNodeID();
+await loadNodeID();
