@@ -12,7 +12,7 @@
 > Nothing here is production-ready — expect major changes as the system evolves.
 
 ---
-
+![Sonar Violations](https://img.shields.io/sonar/violations/Exohayvan_Continuum?server=https%3A%2F%2Fsonarcloud.io&format=short&style=for-the-badge&logo=sonarqubecloud)
 ![Sonar Coverage](https://img.shields.io/sonar/coverage/Exohayvan_Continuum?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud)
 ![Sonar Quality Gate](https://img.shields.io/sonar/quality_gate/Exohayvan_Continuum?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud)
 
