@@ -28,17 +28,23 @@ var (
 
 // App is the Wails application backend.
 type App struct {
-	ctx context.Context
+	quit func()
 }
 
 // NewApp creates the Wails application backend.
 func NewApp() *App {
-	return &App{}
+	return &App{
+		quit: func() {
+			quitApplication(nil)
+		},
+	}
 }
 
 // Startup runs when the application launches.
 func (a *App) Startup(ctx context.Context) {
-	a.ctx = ctx
+	a.quit = func() {
+		quitApplication(ctx)
+	}
 }
 
 // NodeID returns the machine's deterministic node identifier.
@@ -67,11 +73,20 @@ func (a *App) UpdateNow() error {
 		return err
 	}
 
-	quitApplication(a.ctx)
+	a.requestQuit()
 	return nil
 }
 
 // Exit closes the application immediately.
 func (a *App) Exit() {
-	quitApplication(a.ctx)
+	a.requestQuit()
+}
+
+func (a *App) requestQuit() {
+	if a.quit == nil {
+		quitApplication(nil)
+		return
+	}
+
+	a.quit()
 }

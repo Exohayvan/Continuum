@@ -21,10 +21,24 @@ func TestNewAppReturnsEmptyBackend(t *testing.T) {
 }
 
 func TestStartupAcceptsContext(t *testing.T) {
+	originalQuitApplication := quitApplication
+	received := context.Context(nil)
+	quitApplication = func(ctx context.Context) {
+		received = ctx
+	}
+	t.Cleanup(func() {
+		quitApplication = originalQuitApplication
+	})
+
 	app := NewApp()
 	ctx := context.WithValue(context.Background(), testContextKey("suite"), "continuum")
 
 	app.Startup(ctx)
+	app.Exit()
+
+	if received != ctx {
+		t.Fatal("Startup() did not wire quit handler with the provided context")
+	}
 }
 
 func TestNodeIDReturnsResolvedValue(t *testing.T) {

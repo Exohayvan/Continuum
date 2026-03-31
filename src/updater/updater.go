@@ -159,7 +159,7 @@ func checkStatus(ctx context.Context, current string) Status {
 	return status
 }
 
-func checkAndApply(ctx context.Context, current string, goos string, goarch string) error {
+func checkAndApply(ctx context.Context, current, goos, goarch string) error {
 	currentValue, err := version.ParseString(current)
 	if err != nil {
 		return nil
@@ -217,7 +217,7 @@ func checkAndApply(ctx context.Context, current string, goos string, goarch stri
 	return nil
 }
 
-func resolveUpdateAsset(ctx context.Context, current version.Value, goos string, goarch string) (string, string, bool, error) {
+func resolveUpdateAsset(ctx context.Context, current version.Value, goos, goarch string) (string, string, bool, error) {
 	releases, err := fetchReleases(ctx, apiBaseURL, httpClient, RepoOwner, RepoName)
 	if err != nil {
 		return "", "", false, err
@@ -246,7 +246,7 @@ func resolveUpdateAsset(ctx context.Context, current version.Value, goos string,
 	return assetName, assetURL, true, nil
 }
 
-func fetchReleases(ctx context.Context, baseURL string, client *http.Client, owner string, repo string) ([]Release, error) {
+func fetchReleases(ctx context.Context, baseURL string, client *http.Client, owner, repo string) ([]Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/%s/releases", baseURL, owner, repo), nil)
 	if err != nil {
 		return nil, err
@@ -343,7 +343,7 @@ func storeRemoteVersion(tag string) {
 	latestRemoteVersion = "v" + tag
 }
 
-func buildAssetName(tag string, goos string, goarch string) string {
+func buildAssetName(tag, goos, goarch string) string {
 	normalizedTag := tag
 	if !strings.HasPrefix(normalizedTag, "v") {
 		normalizedTag = "v" + normalizedTag
@@ -362,7 +362,7 @@ func findAssetURL(release Release, assetName string) (string, error) {
 	return "", fmt.Errorf("%w: %s", errNoMatchingAsset, assetName)
 }
 
-func downloadReleaseAsset(ctx context.Context, client *http.Client, url string, destination string) error {
+func downloadReleaseAsset(ctx context.Context, client *http.Client, url, destination string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -394,7 +394,7 @@ func downloadReleaseAsset(ctx context.Context, client *http.Client, url string, 
 	return err
 }
 
-func extractTarGz(archivePath string, destination string) error {
+func extractTarGz(archivePath, destination string) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -462,7 +462,7 @@ func writeTarFile(tarReader *tar.Reader, targetPath string, mode os.FileMode) er
 	return out.Close()
 }
 
-func archiveTarget(destination string, entryName string) (string, error) {
+func archiveTarget(destination, entryName string) (string, error) {
 	cleanDestination := filepath.Clean(destination)
 	cleanTarget := filepath.Clean(filepath.Join(cleanDestination, entryName))
 
@@ -478,7 +478,7 @@ func archiveTarget(destination string, entryName string) (string, error) {
 	return cleanTarget, nil
 }
 
-func applyExtractedUpdate(goos string, extractDir string) (string, bool, error) {
+func applyExtractedUpdate(goos, extractDir string) (string, bool, error) {
 	currentPath, err := currentExecutable()
 	if err != nil {
 		return "", false, err
@@ -552,7 +552,7 @@ func appBundleRoot(executable string) (string, error) {
 	return executable[:index+4], nil
 }
 
-func replaceUnixBinary(currentPath string, replacementPath string) (string, error) {
+func replaceUnixBinary(currentPath, replacementPath string) (string, error) {
 	stagedPath := siblingTempPath(currentPath, ".incoming")
 	_ = removePath(stagedPath)
 
@@ -572,7 +572,7 @@ func replaceUnixBinary(currentPath string, replacementPath string) (string, erro
 	return currentPath, nil
 }
 
-func replaceAppBundle(currentExecutablePath string, replacementBundle string) (string, error) {
+func replaceAppBundle(currentExecutablePath, replacementBundle string) (string, error) {
 	currentBundle, err := appBundleRoot(currentExecutablePath)
 	if err != nil {
 		return "", err
@@ -602,11 +602,11 @@ func replaceAppBundle(currentExecutablePath string, replacementBundle string) (s
 	return filepath.Join(currentBundle, "Contents", "MacOS", filepath.Base(currentExecutablePath)), nil
 }
 
-func siblingTempPath(path string, suffix string) string {
+func siblingTempPath(path, suffix string) string {
 	return filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+suffix)
 }
 
-func copyFile(sourcePath string, destinationPath string) error {
+func copyFile(sourcePath, destinationPath string) error {
 	sourceFile, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -637,7 +637,7 @@ func copyFile(sourcePath string, destinationPath string) error {
 	return nil
 }
 
-func copyTree(sourceRoot string, destinationRoot string) error {
+func copyTree(sourceRoot, destinationRoot string) error {
 	return filepath.WalkDir(sourceRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -662,7 +662,7 @@ func copyTree(sourceRoot string, destinationRoot string) error {
 	})
 }
 
-func scheduleWindowsReplacement(currentPath string, replacementPath string) error {
+func scheduleWindowsReplacement(currentPath, replacementPath string) error {
 	scriptPath := filepath.Join(filepath.Dir(replacementPath), "continuum-update.cmd")
 	if err := writeTextFile(scriptPath, []byte(windowsUpdateScript(currentPath, replacementPath)), 0o700); err != nil {
 		return err
@@ -682,7 +682,7 @@ func scheduleWindowsReplacement(currentPath string, replacementPath string) erro
 	return proc.Release()
 }
 
-func windowsUpdateScript(currentPath string, replacementPath string) string {
+func windowsUpdateScript(currentPath, replacementPath string) string {
 	previousPath := currentPath + ".previous"
 
 	lines := []string{
