@@ -13,9 +13,6 @@ on:
       - go.sum
       - build/**
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   build:
     name: ${{ matrix.artifact_name }}
@@ -75,9 +72,15 @@ jobs:
           fi
           wails build -clean -platform "${{ matrix.platform }}" -o Continuum ${EXTRA_ARGS}
 
+      - name: Package desktop artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.artifact_name }}.tar.gz" -C build/bin .
+
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
-          path: build/bin/**
+          path: dist/${{ matrix.artifact_name }}.tar.gz
           if-no-files-found: error

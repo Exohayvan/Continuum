@@ -7,9 +7,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   sonarqube:
     name: SonarQube
@@ -27,7 +24,17 @@ jobs:
       - name: Run tests with coverage
         run: go test ./... -coverprofile=coverage.out
 
+      - name: Install SonarScanner CLI
+        shell: bash
+        run: |
+          SCANNER_VERSION="8.0.1.6346"
+          SCANNER_ZIP="sonar-scanner-cli-${SCANNER_VERSION}-linux-x64.zip"
+          curl --location --output "${RUNNER_TEMP}/${SCANNER_ZIP}" \
+            "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/${SCANNER_ZIP}"
+          unzip -q "${RUNNER_TEMP}/${SCANNER_ZIP}" -d "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/sonar-scanner-${SCANNER_VERSION}-linux-x64/bin" >> "${GITHUB_PATH}"
+
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: sonar-scanner -Dsonar.projectBaseDir=.
