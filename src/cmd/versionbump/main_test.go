@@ -143,7 +143,7 @@ func TestMainWritesErrorAndExits(t *testing.T) {
 
 	main()
 
-	if got := stderr.String(); got == "" {
+	if stderr.String() == "" {
 		t.Fatal("stderr = empty, want an error message")
 	}
 

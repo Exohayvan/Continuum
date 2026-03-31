@@ -670,7 +670,7 @@ func TestReplaceAppBundleFailure(t *testing.T) {
 	defer restore()
 
 	renameCalls := 0
-	renamePath = func(oldPath string, newPath string) error {
+	renamePath = func(oldPath, newPath string) error {
 		renameCalls++
 		if renameCalls == 2 {
 			return fmt.Errorf(renameFailedError)

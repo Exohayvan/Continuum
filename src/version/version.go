@@ -111,7 +111,7 @@ func containsAnyKeyword(messages string, keywords []string) bool {
 	return false
 }
 
-func containsKeyword(messages string, keyword string) bool {
+func containsKeyword(messages, keyword string) bool {
 	messageTokens := splitTokens(messages)
 	keywordTokens := splitTokens(keyword)
 	if len(keywordTokens) == 0 {
