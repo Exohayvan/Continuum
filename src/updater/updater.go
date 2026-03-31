@@ -239,8 +239,6 @@ func resolveUpdateAsset(ctx context.Context, current version.Value, goos, goarch
 		if errors.Is(err, errNoStableRelease) {
 			return "", "", false, nil
 		}
-
-		return "", "", false, err
 	}
 
 	storeRemoteVersion(latest.TagName)
