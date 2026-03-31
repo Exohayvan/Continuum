@@ -134,6 +134,14 @@ async function triggerUpdateNow() {
 
     try {
         await appBridge.UpdateNow();
+        statusElement.textContent = "Refreshing update status...";
+        await loadShellState();
+        if (pendingUpdateStatus === null) {
+            statusElement.textContent = "Already up to date";
+            return;
+        }
+
+        statusElement.textContent = "Update still required";
     } catch (error) {
         updateMessageElement.textContent = "Update failed. You can try again or exit.";
         updateNowButton.disabled = false;
