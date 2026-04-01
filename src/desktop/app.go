@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"continuum/src/datamanager"
+	"continuum/src/networkmanager"
 	"continuum/src/nodeid"
 	"continuum/src/updater"
 	"continuum/src/version"
@@ -14,6 +15,7 @@ import (
 var (
 	resolveNodeID        = nodeid.GetNodeID
 	resolveDiskUsage     = datamanager.Snapshot
+	resolveNetworkUsage  = networkmanager.Snapshot
 	resolveVersion       = version.Get
 	resolveRemoteVersion = updater.RemoteVersion
 	resolveUpdateStatus  = updater.CheckStatus
@@ -59,6 +61,11 @@ func (a *App) NodeID() string {
 // DiskUsage returns the current managed-data disk usage snapshot.
 func (a *App) DiskUsage() (datamanager.DiskUsage, error) {
 	return resolveDiskUsage()
+}
+
+// NetworkUsage returns the current managed network throughput snapshot.
+func (a *App) NetworkUsage() networkmanager.Usage {
+	return resolveNetworkUsage()
 }
 
 // Version returns the current application version string.

@@ -1,0 +1,218 @@
+package networkmanager
+
+import (
+	"bytes"
+	"io"
+	"net"
+	"testing"
+	"time"
+)
+
+func TestSnapshotReturnsZeroWhenNoTrafficRecorded(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	got := Snapshot()
+	if got.ReadMbps != 0 || got.WriteMbps != 0 || got.TotalReadBytes != 0 || got.TotalWriteBytes != 0 {
+		t.Fatalf("Snapshot() = %#v, want zero usage", got)
+	}
+}
+
+func TestWrapReadWriterTracksReadAndWriteThroughput(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	now := time.Unix(1_700_000_000, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	target := &stubReadWriter{
+		readData: []byte("peer"),
+	}
+	wrapped := WrapReadWriter(target)
+	if wrapped == nil {
+		t.Fatal("WrapReadWriter() = nil, want wrapper")
+	}
+
+	buffer := make([]byte, len(target.readData))
+	readCount, err := wrapped.Read(buffer)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if readCount != len(target.readData) {
+		t.Fatalf("Read() = %d, want %d", readCount, len(target.readData))
+	}
+
+	writeCount, err := wrapped.Write([]byte("uplink"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if writeCount != len("uplink") {
+		t.Fatalf("Write() = %d, want %d", writeCount, len("uplink"))
+	}
+
+	usage := Snapshot()
+	if usage.TotalReadBytes != uint64(len("peer")) {
+		t.Fatalf("Snapshot().TotalReadBytes = %d, want %d", usage.TotalReadBytes, len("peer"))
+	}
+	if usage.TotalWriteBytes != uint64(len("uplink")) {
+		t.Fatalf("Snapshot().TotalWriteBytes = %d, want %d", usage.TotalWriteBytes, len("uplink"))
+	}
+	if usage.ReadMbps <= 0 {
+		t.Fatalf("Snapshot().ReadMbps = %f, want > 0", usage.ReadMbps)
+	}
+	if usage.WriteMbps <= 0 {
+		t.Fatalf("Snapshot().WriteMbps = %f, want > 0", usage.WriteMbps)
+	}
+}
+
+func TestWrapReadWriteCloserPreservesClose(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	target := &stubReadWriteCloser{}
+	wrapped := WrapReadWriteCloser(target)
+	if wrapped == nil {
+		t.Fatal("WrapReadWriteCloser() = nil, want wrapper")
+	}
+
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !target.closed {
+		t.Fatal("Close() did not reach wrapped target")
+	}
+}
+
+func TestWrapConnTracksTraffic(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	now := time.Unix(1_700_000_001, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		wrapped := WrapConn(left)
+		if wrapped == nil {
+			done <- io.ErrClosedPipe
+			return
+		}
+
+		buffer := make([]byte, 4)
+		if _, err := wrapped.Read(buffer); err != nil {
+			done <- err
+			return
+		}
+		if _, err := wrapped.Write([]byte("pong")); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	if _, err := right.Write([]byte("ping")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	reply := make([]byte, 4)
+	if _, err := right.Read(reply); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if !bytes.Equal(reply, []byte("pong")) {
+		t.Fatalf("reply = %q, want %q", reply, "pong")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("wrapped conn goroutine error = %v", err)
+	}
+
+	usage := Snapshot()
+	if usage.TotalReadBytes != uint64(len("ping")) {
+		t.Fatalf("Snapshot().TotalReadBytes = %d, want %d", usage.TotalReadBytes, len("ping"))
+	}
+	if usage.TotalWriteBytes != uint64(len("pong")) {
+		t.Fatalf("Snapshot().TotalWriteBytes = %d, want %d", usage.TotalWriteBytes, len("pong"))
+	}
+}
+
+func TestSnapshotExcludesOldTrafficFromCurrentWindow(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	baseTime := time.Unix(1_700_000_002, 0)
+	currentTime = func() time.Time {
+		return baseTime
+	}
+
+	recordRead(len("old"))
+	recordWrite(len("old"))
+
+	currentTime = func() time.Time {
+		return baseTime.Add(2 * time.Second)
+	}
+
+	usage := Snapshot()
+	if usage.ReadMbps != 0 || usage.WriteMbps != 0 {
+		t.Fatalf("Snapshot() current window = %#v, want zero throughput", usage)
+	}
+	if usage.TotalReadBytes != uint64(len("old")) || usage.TotalWriteBytes != uint64(len("old")) {
+		t.Fatalf("Snapshot() lifetime totals = %#v, want retained totals", usage)
+	}
+}
+
+func TestWrapHelpersReturnNilForNilTargets(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	if WrapReadWriter(nil) != nil {
+		t.Fatal("WrapReadWriter(nil) = non-nil, want nil")
+	}
+	if WrapReadWriteCloser(nil) != nil {
+		t.Fatal("WrapReadWriteCloser(nil) = non-nil, want nil")
+	}
+	if WrapConn(nil) != nil {
+		t.Fatal("WrapConn(nil) = non-nil, want nil")
+	}
+}
+
+func resetNetworkManagerTestState(t *testing.T) {
+	originalCurrentTime := currentTime
+	currentTime = time.Now
+	managerState = trackedState{}
+
+	t.Cleanup(func() {
+		currentTime = originalCurrentTime
+		managerState = trackedState{}
+	})
+}
+
+type stubReadWriter struct {
+	readData []byte
+}
+
+func (s *stubReadWriter) Read(buffer []byte) (int, error) {
+	copy(buffer, s.readData)
+	return len(s.readData), nil
+}
+
+func (s *stubReadWriter) Write(buffer []byte) (int, error) {
+	return len(buffer), nil
+}
+
+type stubReadWriteCloser struct {
+	closed bool
+}
+
+func (s *stubReadWriteCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (s *stubReadWriteCloser) Write(buffer []byte) (int, error) {
+	return len(buffer), nil
+}
+
+func (s *stubReadWriteCloser) Close() error {
+	s.closed = true
+	return nil
+}

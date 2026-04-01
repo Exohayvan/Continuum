@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"continuum/src/datamanager"
+	"continuum/src/networkmanager"
 	"continuum/src/updater"
 )
 
@@ -164,6 +165,28 @@ func TestDiskUsageReturnsError(t *testing.T) {
 	_, err := app.DiskUsage()
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("DiskUsage() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestNetworkUsageReturnsResolvedValue(t *testing.T) {
+	originalResolveNetworkUsage := resolveNetworkUsage
+	want := networkmanager.Usage{
+		ReadMbps:        3.5,
+		WriteMbps:       7.25,
+		TotalReadBytes:  2048,
+		TotalWriteBytes: 4096,
+	}
+	resolveNetworkUsage = func() networkmanager.Usage {
+		return want
+	}
+	t.Cleanup(func() {
+		resolveNetworkUsage = originalResolveNetworkUsage
+	})
+
+	app := NewApp()
+	got := app.NetworkUsage()
+	if got != want {
+		t.Fatalf("NetworkUsage() = %#v, want %#v", got, want)
 	}
 }
 

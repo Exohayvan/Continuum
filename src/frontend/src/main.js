@@ -95,6 +95,14 @@ function formatDiskUsage(snapshot) {
     return `${formatBytes(snapshot.dataBytes)} / ${formatBytes(snapshot.volumeBytes)} (${formatPercent(snapshot.usagePercent)}) • R ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s • W ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s`;
 }
 
+function formatBandwidthUsage(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") {
+        return defaultPlaceholder;
+    }
+
+    return `Up ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s • Down ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s`;
+}
+
 function applySectionUpdate(section, payload) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         return;
@@ -173,6 +181,7 @@ async function loadShellState() {
 
         setMetric("node.nodeId", nodeID);
         await loadDiskUsage();
+        await loadBandwidthUsage();
         versionElement.textContent = `${formatVersion(updateStatus.currentVersion)} (remote ${formatVersion(updateStatus.remoteVersion)})`;
         syncUpdateModal(updateStatus);
         statusElement.textContent = "Dashboard ready";
@@ -193,6 +202,17 @@ async function loadDiskUsage() {
     } catch (error) {
         setMetric("node.diskUsage", "Unavailable");
         fieldElements.get("node.diskUsage")?.classList.remove("is-placeholder");
+        console.error(error);
+    }
+}
+
+async function loadBandwidthUsage() {
+    try {
+        const snapshot = await appBridge.NetworkUsage();
+        setMetric("node.bandwidth", formatBandwidthUsage(snapshot));
+    } catch (error) {
+        setMetric("node.bandwidth", "Unavailable");
+        fieldElements.get("node.bandwidth")?.classList.remove("is-placeholder");
         console.error(error);
     }
 }
@@ -373,6 +393,7 @@ function startDiskUsageChecks() {
 
     diskUsageTimer = globalThis.setInterval(() => {
         void loadDiskUsage();
+        void loadBandwidthUsage();
     }, diskUsageRefreshIntervalMs);
 }
 
