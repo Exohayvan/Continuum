@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"continuum/src/datamanager"
 	"continuum/src/updater"
 )
 
@@ -119,6 +120,50 @@ func TestVersionReturnsResolvedValue(t *testing.T) {
 	app := NewApp()
 	if got := app.Version(); got != testVersion {
 		t.Fatalf("Version() = %q, want %q", got, testVersion)
+	}
+}
+
+func TestDiskUsageReturnsResolvedValue(t *testing.T) {
+	originalResolveDiskUsage := resolveDiskUsage
+	want := datamanager.DiskUsage{
+		DataPath:     "/tmp/continuum/data",
+		DataBytes:    256,
+		VolumeBytes:  1024,
+		UsagePercent: 25,
+		ReadMbps:     1.25,
+		WriteMbps:    2.5,
+	}
+	resolveDiskUsage = func() (datamanager.DiskUsage, error) {
+		return want, nil
+	}
+	t.Cleanup(func() {
+		resolveDiskUsage = originalResolveDiskUsage
+	})
+
+	app := NewApp()
+	got, err := app.DiskUsage()
+	if err != nil {
+		t.Fatalf("DiskUsage() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("DiskUsage() = %#v, want %#v", got, want)
+	}
+}
+
+func TestDiskUsageReturnsError(t *testing.T) {
+	originalResolveDiskUsage := resolveDiskUsage
+	wantErr := errors.New("snapshot failed")
+	resolveDiskUsage = func() (datamanager.DiskUsage, error) {
+		return datamanager.DiskUsage{}, wantErr
+	}
+	t.Cleanup(func() {
+		resolveDiskUsage = originalResolveDiskUsage
+	})
+
+	app := NewApp()
+	_, err := app.DiskUsage()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("DiskUsage() error = %v, want %v", err, wantErr)
 	}
 }
 

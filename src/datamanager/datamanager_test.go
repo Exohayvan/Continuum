@@ -2,18 +2,20 @@ package datamanager
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+)
+
+const (
+	testManagedFile = "network/stats/usage.txt"
+	testFileData    = "continuum"
 )
 
 func TestEnsureLayoutCreatesManagedDirectoriesNextToExecutable(t *testing.T) {
-	originalCurrentExecutable := currentExecutable
-	originalCreateDirectory := createDirectory
-	t.Cleanup(func() {
-		currentExecutable = originalCurrentExecutable
-		createDirectory = originalCreateDirectory
-	})
+	resetDataManagerTestState(t)
 
 	root := t.TempDir()
 	executablePath := filepath.Join(root, "Continuum")
@@ -42,15 +44,14 @@ func TestEnsureLayoutCreatesManagedDirectoriesNextToExecutable(t *testing.T) {
 			t.Fatalf("%q is not a directory", fullPath)
 		}
 	}
+
+	if got := managerState.getDataPath(); got != wantDataPath {
+		t.Fatalf("managed data path = %q, want %q", got, wantDataPath)
+	}
 }
 
 func TestEnsureLayoutCreatesManagedDirectoriesNextToAppBundle(t *testing.T) {
-	originalCurrentExecutable := currentExecutable
-	originalCreateDirectory := createDirectory
-	t.Cleanup(func() {
-		currentExecutable = originalCurrentExecutable
-		createDirectory = originalCreateDirectory
-	})
+	resetDataManagerTestState(t)
 
 	root := t.TempDir()
 	executablePath := filepath.Join(root, "Continuum.app", "Contents", "MacOS", "Continuum")
@@ -75,10 +76,7 @@ func TestEnsureLayoutCreatesManagedDirectoriesNextToAppBundle(t *testing.T) {
 }
 
 func TestEnsureLayoutReturnsExecutableError(t *testing.T) {
-	originalCurrentExecutable := currentExecutable
-	t.Cleanup(func() {
-		currentExecutable = originalCurrentExecutable
-	})
+	resetDataManagerTestState(t)
 
 	wantErr := errors.New("missing executable")
 	currentExecutable = func() (string, error) {
@@ -92,12 +90,7 @@ func TestEnsureLayoutReturnsExecutableError(t *testing.T) {
 }
 
 func TestEnsureLayoutReturnsDirectoryError(t *testing.T) {
-	originalCurrentExecutable := currentExecutable
-	originalCreateDirectory := createDirectory
-	t.Cleanup(func() {
-		currentExecutable = originalCurrentExecutable
-		createDirectory = originalCreateDirectory
-	})
+	resetDataManagerTestState(t)
 
 	currentExecutable = func() (string, error) {
 		return filepath.Join(t.TempDir(), "Continuum"), nil
@@ -114,9 +107,188 @@ func TestEnsureLayoutReturnsDirectoryError(t *testing.T) {
 	}
 }
 
-func TestAppDirectoryUsesExecutableParent(t *testing.T) {
-	t.Parallel()
+func TestSnapshotReportsManagedUsageAndThroughput(t *testing.T) {
+	resetDataManagerTestState(t)
 
+	root := t.TempDir()
+	dataPath := filepath.Join(root, "data")
+	if err := os.MkdirAll(filepath.Join(dataPath, "network", "stats"), directoryMode); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	managerState.setDataPath(dataPath)
+	createDirectory = os.MkdirAll
+	readManagedFile = os.ReadFile
+	writeManagedFile = os.WriteFile
+	walkManagedPath = filepath.WalkDir
+	statFilesystem = func(string) (uint64, error) {
+		return 1024, nil
+	}
+
+	now := time.Unix(1_700_000_000, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	if err := WriteFile(testManagedFile, []byte(testFileData), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := ReadFile(testManagedFile); err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	snapshot, err := Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	if snapshot.DataPath != dataPath {
+		t.Fatalf("Snapshot().DataPath = %q, want %q", snapshot.DataPath, dataPath)
+	}
+	if snapshot.DataBytes != uint64(len(testFileData)) {
+		t.Fatalf("Snapshot().DataBytes = %d, want %d", snapshot.DataBytes, len(testFileData))
+	}
+	if snapshot.VolumeBytes != 1024 {
+		t.Fatalf("Snapshot().VolumeBytes = %d, want %d", snapshot.VolumeBytes, 1024)
+	}
+	if snapshot.UsagePercent <= 0 {
+		t.Fatalf("Snapshot().UsagePercent = %f, want > 0", snapshot.UsagePercent)
+	}
+	if snapshot.ReadMbps <= 0 {
+		t.Fatalf("Snapshot().ReadMbps = %f, want > 0", snapshot.ReadMbps)
+	}
+	if snapshot.WriteMbps <= 0 {
+		t.Fatalf("Snapshot().WriteMbps = %f, want > 0", snapshot.WriteMbps)
+	}
+}
+
+func TestSnapshotReturnsDirectorySizeError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+	wantErr := errors.New("walk failed")
+	walkManagedPath = func(string, fs.WalkDirFunc) error {
+		return wantErr
+	}
+
+	_, err := Snapshot()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSnapshotReturnsFilesystemError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	root := t.TempDir()
+	managerState.setDataPath(root)
+	walkManagedPath = filepath.WalkDir
+	statFilesystem = func(string) (uint64, error) {
+		return 0, errors.New("statfs failed")
+	}
+
+	_, err := Snapshot()
+	if err == nil || err.Error() != "statfs failed" {
+		t.Fatalf("Snapshot() error = %v, want statfs failure", err)
+	}
+}
+
+func TestReadFileReturnsManagedPathError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+
+	_, err := ReadFile("../outside")
+	if !errors.Is(err, errPathEscapesDataRoot) {
+		t.Fatalf("ReadFile() error = %v, want %v", err, errPathEscapesDataRoot)
+	}
+}
+
+func TestReadFileReturnsUnderlyingError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+	wantErr := errors.New("read failed")
+	readManagedFile = func(string) ([]byte, error) {
+		return nil, wantErr
+	}
+
+	_, err := ReadFile("stats/missing.json")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ReadFile() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestWriteFileReturnsManagedPathError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+
+	err := WriteFile("../outside", []byte("bad"), 0o644)
+	if !errors.Is(err, errPathEscapesDataRoot) {
+		t.Fatalf("WriteFile() error = %v, want %v", err, errPathEscapesDataRoot)
+	}
+}
+
+func TestWriteFileReturnsCreateDirectoryError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+	wantErr := errors.New("mkdir failed")
+	createDirectory = func(string, os.FileMode) error {
+		return wantErr
+	}
+
+	err := WriteFile("stats/usage.json", []byte("test"), 0o644)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("WriteFile() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestWriteFileReturnsUnderlyingError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+	createDirectory = os.MkdirAll
+	wantErr := errors.New("write failed")
+	writeManagedFile = func(string, []byte, os.FileMode) error {
+		return wantErr
+	}
+
+	err := WriteFile("stats/usage.json", []byte("test"), 0o644)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("WriteFile() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestManagedPathRejectsAbsolutePaths(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+
+	_, err := managedPath(filepath.Join(string(os.PathSeparator), "tmp", "absolute"))
+	if !errors.Is(err, errPathEscapesDataRoot) {
+		t.Fatalf("managedPath() error = %v, want %v", err, errPathEscapesDataRoot)
+	}
+}
+
+func TestManagedPathReturnsDataRootForCurrentDirectory(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	want := t.TempDir()
+	managerState.setDataPath(want)
+
+	got, err := managedPath(".")
+	if err != nil {
+		t.Fatalf("managedPath() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("managedPath(.) = %q, want %q", got, want)
+	}
+}
+
+func TestAppDirectoryUsesExecutableParent(t *testing.T) {
 	got := appDirectory(filepath.Join("/tmp", "continuum", "Continuum"))
 	want := filepath.Join("/tmp", "continuum")
 	if got != want {
@@ -125,11 +297,39 @@ func TestAppDirectoryUsesExecutableParent(t *testing.T) {
 }
 
 func TestAppDirectoryUsesBundleParent(t *testing.T) {
-	t.Parallel()
-
 	got := appDirectory(filepath.Join("/Applications", "Continuum.app", "Contents", "MacOS", "Continuum"))
 	want := "/Applications"
 	if got != want {
 		t.Fatalf("appDirectory() = %q, want %q", got, want)
 	}
+}
+
+func resetDataManagerTestState(t *testing.T) {
+	originalCurrentExecutable := currentExecutable
+	originalCreateDirectory := createDirectory
+	originalReadManagedFile := readManagedFile
+	originalWriteManagedFile := writeManagedFile
+	originalWalkManagedPath := walkManagedPath
+	originalStatFilesystem := statFilesystem
+	originalCurrentTime := currentTime
+
+	managerState = trackedState{}
+	currentExecutable = os.Executable
+	createDirectory = os.MkdirAll
+	readManagedFile = os.ReadFile
+	writeManagedFile = os.WriteFile
+	walkManagedPath = filepath.WalkDir
+	statFilesystem = systemFilesystemUsage
+	currentTime = time.Now
+
+	t.Cleanup(func() {
+		currentExecutable = originalCurrentExecutable
+		createDirectory = originalCreateDirectory
+		readManagedFile = originalReadManagedFile
+		writeManagedFile = originalWriteManagedFile
+		walkManagedPath = originalWalkManagedPath
+		statFilesystem = originalStatFilesystem
+		currentTime = originalCurrentTime
+		managerState = trackedState{}
+	})
 }

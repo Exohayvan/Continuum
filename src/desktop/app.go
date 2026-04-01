@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"continuum/src/datamanager"
 	"continuum/src/nodeid"
 	"continuum/src/updater"
 	"continuum/src/version"
@@ -12,6 +13,7 @@ import (
 
 var (
 	resolveNodeID        = nodeid.GetNodeID
+	resolveDiskUsage     = datamanager.Snapshot
 	resolveVersion       = version.Get
 	resolveRemoteVersion = updater.RemoteVersion
 	resolveUpdateStatus  = updater.CheckStatus
@@ -52,6 +54,11 @@ func (a *App) Startup(ctx context.Context) {
 // NodeID returns the machine's deterministic node identifier.
 func (a *App) NodeID() string {
 	return resolveNodeID()
+}
+
+// DiskUsage returns the current managed-data disk usage snapshot.
+func (a *App) DiskUsage() (datamanager.DiskUsage, error) {
+	return resolveDiskUsage()
 }
 
 // Version returns the current application version string.

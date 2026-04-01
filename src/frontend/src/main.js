@@ -12,6 +12,7 @@ const appBridge = globalThis.go.desktop.App;
 const runtimeBridge = globalThis.runtime;
 const updateCountdownSeconds = 15;
 const updateCheckIntervalMs = 30 * 60 * 1000;
+const diskUsageRefreshIntervalMs = 2000;
 const defaultPlaceholder = "Pending";
 const dashboardEventBindings = [
     ["dashboard:this-node", "node"],
@@ -21,6 +22,7 @@ const dashboardEventBindings = [
 
 let updateCountdownTimer = null;
 let updateCheckTimer = null;
+let diskUsageTimer = null;
 let countdownRemaining = updateCountdownSeconds;
 let pendingUpdateStatus = null;
 let dashboardEventUnsubscribers = [];
@@ -54,6 +56,43 @@ function setMetric(field, value) {
     const hasValue = value !== null && value !== undefined && String(value).trim() !== "";
     element.textContent = hasValue ? String(value) : element.dataset.placeholder || defaultPlaceholder;
     element.classList.toggle("is-placeholder", !hasValue);
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return "0 B";
+    }
+
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+
+    const decimals = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+function formatPercent(value) {
+    if (!Number.isFinite(value) || value <= 0) {
+        return "0.00%";
+    }
+
+    if (value < 0.01) {
+        return `${value.toFixed(4)}%`;
+    }
+
+    return `${value.toFixed(2)}%`;
+}
+
+function formatDiskUsage(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") {
+        return defaultPlaceholder;
+    }
+
+    return `${formatBytes(snapshot.dataBytes)} / ${formatBytes(snapshot.volumeBytes)} (${formatPercent(snapshot.usagePercent)}) • R ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s • W ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s`;
 }
 
 function applySectionUpdate(section, payload) {
@@ -133,6 +172,7 @@ async function loadShellState() {
         ]);
 
         setMetric("node.nodeId", nodeID);
+        await loadDiskUsage();
         versionElement.textContent = `${formatVersion(updateStatus.currentVersion)} (remote ${formatVersion(updateStatus.remoteVersion)})`;
         syncUpdateModal(updateStatus);
         statusElement.textContent = "Dashboard ready";
@@ -142,6 +182,17 @@ async function loadShellState() {
         versionElement.textContent = "unknown (remote unavailable)";
         statusElement.textContent = "Failed to resolve dashboard";
         hideUpdateModal();
+        console.error(error);
+    }
+}
+
+async function loadDiskUsage() {
+    try {
+        const snapshot = await appBridge.DiskUsage();
+        setMetric("node.diskUsage", formatDiskUsage(snapshot));
+    } catch (error) {
+        setMetric("node.diskUsage", "Unavailable");
+        fieldElements.get("node.diskUsage")?.classList.remove("is-placeholder");
         console.error(error);
     }
 }
@@ -315,6 +366,16 @@ function startUpdateChecks() {
     }, updateCheckIntervalMs);
 }
 
+function startDiskUsageChecks() {
+    if (diskUsageTimer !== null) {
+        return;
+    }
+
+    diskUsageTimer = globalThis.setInterval(() => {
+        void loadDiskUsage();
+    }, diskUsageRefreshIntervalMs);
+}
+
 updateNowButton.addEventListener("click", () => {
     void triggerUpdateNow();
 });
@@ -329,3 +390,4 @@ globalThis.addEventListener("beforeunload", releaseDashboardEvents);
 bindDashboardEvents();
 await loadShellState();
 startUpdateChecks();
+startDiskUsageChecks();
