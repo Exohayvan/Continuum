@@ -1,20 +1,29 @@
-const nodeIDElement = document.getElementById("nodeid");
 const versionElement = document.getElementById("version");
-const refreshButton = document.getElementById("refresh");
 const statusElement = document.getElementById("status");
 const updateDialogElement = document.getElementById("update-dialog");
 const updateMessageElement = document.getElementById("update-message");
 const updateErrorElement = document.getElementById("update-error");
 const updateNowButton = document.getElementById("update-now");
 const exitAppButton = document.getElementById("exit-app");
+const fieldElements = new Map(
+    Array.from(document.querySelectorAll("[data-field]")).map((element) => [element.dataset.field, element]),
+);
 const appBridge = globalThis.go.desktop.App;
+const runtimeBridge = globalThis.runtime;
 const updateCountdownSeconds = 15;
 const updateCheckIntervalMs = 30 * 60 * 1000;
+const defaultPlaceholder = "Pending";
+const dashboardEventBindings = [
+    ["dashboard:this-node", "node"],
+    ["dashboard:your-account", "account"],
+    ["dashboard:network", "network"],
+];
 
 let updateCountdownTimer = null;
 let updateCheckTimer = null;
 let countdownRemaining = updateCountdownSeconds;
 let pendingUpdateStatus = null;
+let dashboardEventUnsubscribers = [];
 
 function formatVersion(value) {
     if (!value) {
@@ -36,9 +45,86 @@ function formatVersion(value) {
     return value;
 }
 
+function setMetric(field, value) {
+    const element = fieldElements.get(field);
+    if (!element) {
+        return;
+    }
+
+    const hasValue = value !== null && value !== undefined && String(value).trim() !== "";
+    element.textContent = hasValue ? String(value) : element.dataset.placeholder || defaultPlaceholder;
+    element.classList.toggle("is-placeholder", !hasValue);
+}
+
+function applySectionUpdate(section, payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return;
+    }
+
+    for (const [key, value] of Object.entries(payload)) {
+        setMetric(`${section}.${key}`, value);
+    }
+}
+
+function applySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+        return;
+    }
+
+    applySectionUpdate("node", snapshot.node);
+    applySectionUpdate("account", snapshot.account);
+    applySectionUpdate("network", snapshot.network);
+}
+
+function normalizeEventPayload(eventData) {
+    if (eventData.length === 1 && eventData[0] && typeof eventData[0] === "object" && !Array.isArray(eventData[0])) {
+        return eventData[0];
+    }
+
+    return {};
+}
+
+function bindDashboardEvents() {
+    const dashboardApi = {
+        setMetric,
+        applySectionUpdate,
+        applySnapshot,
+        resetMetric(field) {
+            setMetric(field, "");
+        },
+    };
+
+    globalThis.continuumDashboard = dashboardApi;
+
+    if (!runtimeBridge || typeof runtimeBridge.EventsOnMultiple !== "function") {
+        return;
+    }
+
+    dashboardEventUnsubscribers = dashboardEventBindings.map(([eventName, section]) =>
+        runtimeBridge.EventsOnMultiple(eventName, (...eventData) => {
+            applySectionUpdate(section, normalizeEventPayload(eventData));
+        }, -1),
+    );
+
+    dashboardEventUnsubscribers.push(
+        runtimeBridge.EventsOnMultiple("dashboard:snapshot", (...eventData) => {
+            applySnapshot(normalizeEventPayload(eventData));
+        }, -1),
+    );
+}
+
+function releaseDashboardEvents() {
+    for (const unsubscribe of dashboardEventUnsubscribers) {
+        if (typeof unsubscribe === "function") {
+            unsubscribe();
+        }
+    }
+
+    dashboardEventUnsubscribers = [];
+}
+
 async function loadShellState() {
-    statusElement.textContent = "Resolving NodeID...";
-    refreshButton.disabled = true;
+    statusElement.textContent = "Resolving dashboard...";
 
     try {
         const [nodeID, updateStatus] = await Promise.all([
@@ -46,18 +132,17 @@ async function loadShellState() {
             appBridge.UpdateStatus(),
         ]);
 
-        nodeIDElement.textContent = nodeID;
+        setMetric("node.nodeId", nodeID);
         versionElement.textContent = `${formatVersion(updateStatus.currentVersion)} (remote ${formatVersion(updateStatus.remoteVersion)})`;
         syncUpdateModal(updateStatus);
-        statusElement.textContent = "NodeID loaded";
+        statusElement.textContent = "Dashboard ready";
     } catch (error) {
-        nodeIDElement.textContent = "Unable to load NodeID";
+        setMetric("node.nodeId", "Unable to load NodeID");
+        fieldElements.get("node.nodeId")?.classList.remove("is-placeholder");
         versionElement.textContent = "unknown (remote unavailable)";
-        statusElement.textContent = "Failed to resolve NodeID";
+        statusElement.textContent = "Failed to resolve dashboard";
         hideUpdateModal();
         console.error(error);
-    } finally {
-        refreshButton.disabled = false;
     }
 }
 
@@ -230,7 +315,6 @@ function startUpdateChecks() {
     }, updateCheckIntervalMs);
 }
 
-refreshButton.addEventListener("click", loadShellState);
 updateNowButton.addEventListener("click", () => {
     void triggerUpdateNow();
 });
@@ -240,5 +324,8 @@ exitAppButton.addEventListener("click", () => {
 updateDialogElement.addEventListener("cancel", (event) => {
     event.preventDefault();
 });
+globalThis.addEventListener("beforeunload", releaseDashboardEvents);
+
+bindDashboardEvents();
 await loadShellState();
 startUpdateChecks();

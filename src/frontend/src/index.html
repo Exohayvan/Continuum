@@ -20,20 +20,162 @@
     </div>
 </dialog>
 <main class="shell">
-    <section class="card">
-        <p class="eyebrow">Continuum</p>
-        <p class="meta">Version <span id="version">Loading...</span></p>
-        <h1>Node Identity</h1>
-        <p class="lede">
-            This desktop shell is running locally and displaying the NodeID generated from this machine.
-        </p>
-
-        <div class="nodeid" id="nodeid">Loading NodeID...</div>
-
-        <div class="actions">
-            <button id="refresh" type="button">Refresh NodeID</button>
-            <span class="status" id="status">Resolving NodeID...</span>
+    <section class="hero">
+        <div class="hero-copy">
+            <p class="eyebrow">Continuum Dashboard</p>
+            <p class="meta">Version <span id="version">Loading...</span></p>
         </div>
+
+        <div class="hero-actions">
+            <span class="status" id="status">Resolving dashboard...</span>
+        </div>
+    </section>
+
+    <section class="dashboard-grid">
+        <section class="panel" data-section="node">
+            <div class="panel-header">
+                <p class="eyebrow">This Node</p>
+                <h2>Local Runtime</h2>
+                <p class="panel-copy">Machine identity, service health, and request workload for the current node.</p>
+            </div>
+
+            <dl class="metric-list">
+                <div class="metric-row metric-row--wide">
+                    <dt>NodeID</dt>
+                    <dd class="metric-value metric-value--code is-placeholder" data-field="node.nodeId" id="nodeid">Resolving...</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Node Alias</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.alias">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>First Seen</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.firstSeen">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Online / Offline / Degraded</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.health">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>App CPU / RAM Usage</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.resourceUsage">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>App Disk Usage</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.diskUsage">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Latency to Other Nodes</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.latency">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>App Bandwidth Up / Down</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.bandwidth">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Peers Connected / Known</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.peers">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>IP : Port</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.listenAddress">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Requests Handled</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.requestsHandled">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Sync Status</dt>
+                    <dd class="metric-value is-placeholder" data-field="node.syncStatus">Pending</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="panel" data-section="account">
+            <div class="panel-header">
+                <p class="eyebrow">Your Account</p>
+                <h2>Identity Layer</h2>
+                <p class="panel-copy">Account relationships, node fleet state, and reputation signals.</p>
+            </div>
+
+            <dl class="metric-list">
+                <div class="metric-row metric-row--wide">
+                    <dt>Username / Derived AccountID</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.identity">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Linked Nodes</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.linkedNodes">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Account Creation Date</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.createdAt">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Nodes Online / Offline</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.nodeStates">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Points / Reputation</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.reputation">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Uptime Across Nodes</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.uptime">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Requests Handled for Account</dt>
+                    <dd class="metric-value is-placeholder" data-field="account.requestsHandled">Pending</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="panel" data-section="network">
+            <div class="panel-header">
+                <p class="eyebrow">The Network</p>
+                <h2>Global Pulse</h2>
+                <p class="panel-copy">Fleet-wide health, throughput, and resilience indicators.</p>
+            </div>
+
+            <dl class="metric-list">
+                <div class="metric-row">
+                    <dt>Total Nodes Online / Registered</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.nodeCount">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Network Health Score</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.health">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Average Latency</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.averageLatency">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Total Requests / sec</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.requestRate">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Total Bandwidth Usage</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.bandwidth">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Data Transferred</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.transferred">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Active Connections</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.activeConnections">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Failing Nodes</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.failingNodes">Pending</dd>
+                </div>
+                <div class="metric-row">
+                    <dt>Average Points / Reputation</dt>
+                    <dd class="metric-value is-placeholder" data-field="network.averageReputation">Pending</dd>
+                </div>
+            </dl>
+        </section>
     </section>
 </main>
 <script src="/main.js" type="module"></script>
