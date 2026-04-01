@@ -249,13 +249,14 @@ func resolveUpdateAsset(ctx context.Context, current version.Value, goos, goarch
 		return "", "", false, nil
 	}
 
-	assetName := buildAssetName(latest.TagName, goos, goarch)
-	assetURL, err := findAssetURL(latest, assetName)
-	if err != nil {
-		return "", "", false, err
+	for _, assetName := range buildAssetNames(latest.TagName, goos, goarch) {
+		assetURL, err := findAssetURL(latest, assetName)
+		if err == nil {
+			return assetName, assetURL, true, nil
+		}
 	}
 
-	return assetName, assetURL, true, nil
+	return "", "", false, fmt.Errorf("%w: %s", errNoMatchingAsset, strings.Join(buildAssetNames(latest.TagName, goos, goarch), ", "))
 }
 
 func fetchReleases(ctx context.Context, baseURL string, client *http.Client, owner, repo string) ([]Release, error) {
@@ -362,6 +363,14 @@ func buildAssetName(tag, goos, goarch string) string {
 	}
 
 	return fmt.Sprintf("continuum-%s-%s-%s.tar.gz", goos, goarch, normalizedTag)
+}
+
+func buildAssetNames(tag, goos, goarch string) []string {
+	names := []string{buildAssetName(tag, goos, goarch)}
+	if goos == "darwin" {
+		names = append(names, buildAssetName(tag, "macos", goarch))
+	}
+	return names
 }
 
 func findAssetURL(release Release, assetName string) (string, error) {

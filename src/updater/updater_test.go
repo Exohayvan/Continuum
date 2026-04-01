@@ -39,6 +39,8 @@ const (
   }
 ]`
 	linuxAMD64AssetV150            = "continuum-linux-amd64-v1.5.0.tar.gz"
+	darwinARM64AssetV160           = "continuum-darwin-arm64-v1.6.0.tar.gz"
+	macosARM64AssetV160            = "continuum-macos-arm64-v1.6.0.tar.gz"
 	linuxDownloadURL               = "https://example.test/linux"
 	stableReleaseTag               = "v1.6.0"
 	releasesAPIPath                = "/repos/Exohayvan/Continuum/releases"
@@ -67,6 +69,22 @@ func TestBuildAssetName(t *testing.T) {
 
 	if got := buildAssetName("1.5.0", "linux", "amd64"); got != linuxAMD64AssetV150 {
 		t.Fatalf("buildAssetName() = %q, want %q", got, linuxAMD64AssetV150)
+	}
+}
+
+func TestBuildAssetNamesDarwinIncludesMacOSAlias(t *testing.T) {
+	t.Parallel()
+
+	got := buildAssetNames(stableReleaseTag, "darwin", "arm64")
+	want := []string{darwinARM64AssetV160, macosARM64AssetV160}
+
+	if len(got) != len(want) {
+		t.Fatalf("len(buildAssetNames()) = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("buildAssetNames()[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 
@@ -1493,6 +1511,37 @@ func TestResolveUpdateAssetNoUpdateWhenCurrentMatchesLatest(t *testing.T) {
 	}
 	if assetName != "" || assetURL != "" || shouldUpdate {
 		t.Fatalf("resolveUpdateAsset() = (%q, %q, %t), want empty no-update result", assetName, assetURL, shouldUpdate)
+	}
+}
+
+func TestResolveUpdateAssetDarwinAcceptsMacOSAssetName(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[{"tag_name":%q,"prerelease":false,"assets":[{"name":%q,"browser_download_url":%q}]}]`,
+			stableReleaseTag,
+			macosARM64AssetV160,
+			linuxDownloadURL,
+		)
+	}))
+	defer server.Close()
+
+	apiBaseURL = server.URL
+	httpClient = server.Client()
+
+	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 5, Patch: 0}, "darwin", "arm64")
+	if err != nil {
+		t.Fatalf("resolveUpdateAsset() error = %v", err)
+	}
+	if !shouldUpdate {
+		t.Fatal("resolveUpdateAsset() shouldUpdate = false, want true")
+	}
+	if assetName != macosARM64AssetV160 {
+		t.Fatalf("resolveUpdateAsset() assetName = %q, want %q", assetName, macosARM64AssetV160)
+	}
+	if assetURL != linuxDownloadURL {
+		t.Fatalf("resolveUpdateAsset() assetURL = %q, want %q", assetURL, linuxDownloadURL)
 	}
 }
 
