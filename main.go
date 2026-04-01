@@ -8,6 +8,7 @@ import (
 
 	"continuum/src/datamanager"
 	"continuum/src/desktop"
+	"continuum/src/updater"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -17,11 +18,12 @@ import (
 var assets embed.FS
 
 var (
-	newApplication             = desktop.NewApp
-	ensureDataLayout           = datamanager.EnsureLayout
-	startWails                 = wails.Run
-	runApplication             = runApp
-	stderrWriter     io.Writer = os.Stderr
+	newApplication                       = desktop.NewApp
+	ensureDataLayout                     = datamanager.EnsureLayout
+	ensureBundleReadyOnStartup           = updater.EnsureBundleReadyOnStartup
+	startWails                           = wails.Run
+	runApplication                       = runApp
+	stderrWriter               io.Writer = os.Stderr
 )
 
 func buildOptions(app *desktop.App) *options.App {
@@ -45,6 +47,10 @@ func buildOptions(app *desktop.App) *options.App {
 func runApp() error {
 	if _, err := ensureDataLayout(); err != nil {
 		return err
+	}
+
+	if err := ensureBundleReadyOnStartup(); err != nil {
+		fmt.Fprintln(stderrWriter, err)
 	}
 
 	app := newApplication()

@@ -59,6 +59,7 @@ var (
 	httpClient        = &http.Client{Timeout: 30 * time.Second}
 	currentVersion    = version.Get
 	currentExecutable = os.Executable
+	hostGOOS          = runtime.GOOS
 	createTempDir     = os.MkdirTemp
 	createDirs        = os.MkdirAll
 	removeAllPaths    = os.RemoveAll
@@ -68,6 +69,7 @@ var (
 	writeTextFile     = os.WriteFile
 	startOSProcess    = os.StartProcess
 	lookPath          = exec.LookPath
+	runCommandOutput  = func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() }
 	startAsync        = startAsyncDefault
 	runCheckAndApply  = CheckAndApply
 	runCheckStatus    = CheckStatus
@@ -117,6 +119,27 @@ func StartBackground() {
 			runLoop(DefaultCheckInterval)
 		})
 	})
+}
+
+func EnsureBundleReadyOnStartup() error {
+	if hostGOOS != "darwin" {
+		return nil
+	}
+
+	currentPath, err := currentExecutable()
+	if err != nil {
+		return nil
+	}
+
+	bundlePath, err := appBundleRoot(currentPath)
+	if err != nil {
+		if errors.Is(err, errAppBundleMissing) {
+			return nil
+		}
+		return err
+	}
+
+	return clearBundleQuarantine(bundlePath)
 }
 
 // SetStatusObserver registers a callback for background status refreshes.
@@ -677,6 +700,14 @@ func replaceAppBundle(currentExecutablePath, replacementBundle string) (string, 
 		return "", err
 	}
 
+	if err := clearBundleQuarantine(targetBundle); err != nil {
+		_ = removeAllPaths(targetBundle)
+		if restoreErr := renamePath(previousBundle, targetBundle); restoreErr != nil {
+			return "", fmt.Errorf("clear quarantine: %w (restore failed: %v)", err, restoreErr)
+		}
+		return "", err
+	}
+
 	_ = removeAllPaths(previousBundle)
 	return filepath.Join(targetBundle, "Contents", "MacOS", filepath.Base(currentExecutablePath)), nil
 }
@@ -695,6 +726,32 @@ func visibleAppBundlePath(path string) string {
 	base = strings.TrimSuffix(base, ".incoming")
 	base = strings.TrimSuffix(base, ".previous")
 	return filepath.Join(dir, base)
+}
+
+func clearBundleQuarantine(path string) error {
+	if hostGOOS != "darwin" {
+		return nil
+	}
+
+	xattrPath, err := lookPath("xattr")
+	if err != nil {
+		return err
+	}
+
+	output, err := runCommandOutput(xattrPath, "-dr", "com.apple.quarantine", path)
+	if err == nil {
+		return nil
+	}
+
+	trimmedOutput := strings.TrimSpace(string(output))
+	if strings.Contains(trimmedOutput, "No such xattr") {
+		return nil
+	}
+	if trimmedOutput == "" {
+		return err
+	}
+
+	return fmt.Errorf("clear quarantine: %w: %s", err, trimmedOutput)
 }
 
 func copyFile(sourcePath, destinationPath string) error {

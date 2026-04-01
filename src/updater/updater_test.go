@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -935,6 +936,127 @@ func TestReplaceAppBundleInvalidExecutable(t *testing.T) {
 
 	if _, err := replaceAppBundle(tmpContinuumBinary, "/tmp/download/Continuum.app"); err == nil {
 		t.Fatal("replaceAppBundle() error = nil, want invalid bundle failure")
+	}
+}
+
+func TestReplaceAppBundleQuarantineClearFailureRestoresPreviousBundle(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	lookPath = func(string) (string, error) {
+		return "/usr/bin/xattr", nil
+	}
+	runCommandOutput = func(string, ...string) ([]byte, error) {
+		return []byte("operation not permitted"), fmt.Errorf("exit status 1")
+	}
+
+	root := t.TempDir()
+	currentBundle := filepath.Join(root, AppName+".app")
+	currentExec := filepath.Join(currentBundle, "Contents", "MacOS", AppName)
+	replacementBundle := filepath.Join(root, "download", AppName+".app")
+	replacementExec := filepath.Join(replacementBundle, "Contents", "MacOS", AppName)
+
+	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	if _, err := replaceAppBundle(currentExec, replacementBundle); err == nil {
+		t.Fatal("replaceAppBundle() error = nil, want quarantine clear failure")
+	}
+
+	data, err := os.ReadFile(currentExec)
+	if err != nil {
+		t.Fatalf(readFileErrorFormat, err)
+	}
+	if string(data) != "old" {
+		t.Fatalf("replaceAppBundle() restored contents = %q, want %q", string(data), "old")
+	}
+}
+
+func TestEnsureBundleReadyOnStartupNoOpOutsideDarwin(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "linux"
+	currentExecutable = func() (string, error) {
+		t.Fatal("EnsureBundleReadyOnStartup() requested executable outside darwin")
+		return "", nil
+	}
+
+	if err := EnsureBundleReadyOnStartup(); err != nil {
+		t.Fatalf("EnsureBundleReadyOnStartup() error = %v", err)
+	}
+}
+
+func TestEnsureBundleReadyOnStartupClearsCurrentBundleQuarantine(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	currentExecutable = func() (string, error) {
+		return filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName), nil
+	}
+	lookPath = func(name string) (string, error) {
+		if name != "xattr" {
+			t.Fatalf("lookPath() name = %q, want %q", name, "xattr")
+		}
+		return "/usr/bin/xattr", nil
+	}
+
+	called := false
+	runCommandOutput = func(name string, args ...string) ([]byte, error) {
+		called = true
+		if name != "/usr/bin/xattr" {
+			t.Fatalf("runCommandOutput() name = %q, want %q", name, "/usr/bin/xattr")
+		}
+
+		wantArgs := []string{"-dr", "com.apple.quarantine", filepath.Join("/Applications", AppName+".app")}
+		if len(args) != len(wantArgs) {
+			t.Fatalf("len(runCommandOutput() args) = %d, want %d", len(args), len(wantArgs))
+		}
+		for i := range wantArgs {
+			if args[i] != wantArgs[i] {
+				t.Fatalf("runCommandOutput() args[%d] = %q, want %q", i, args[i], wantArgs[i])
+			}
+		}
+
+		return nil, nil
+	}
+
+	if err := EnsureBundleReadyOnStartup(); err != nil {
+		t.Fatalf("EnsureBundleReadyOnStartup() error = %v", err)
+	}
+
+	if !called {
+		t.Fatal("EnsureBundleReadyOnStartup() did not attempt to clear quarantine")
+	}
+}
+
+func TestEnsureBundleReadyOnStartupNoOpOutsideAppBundle(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	currentExecutable = func() (string, error) {
+		return filepath.Join(t.TempDir(), AppName), nil
+	}
+	lookPath = func(string) (string, error) {
+		t.Fatal("EnsureBundleReadyOnStartup() looked up xattr for a non-bundle executable")
+		return "", nil
+	}
+
+	if err := EnsureBundleReadyOnStartup(); err != nil {
+		t.Fatalf("EnsureBundleReadyOnStartup() error = %v", err)
 	}
 }
 
@@ -2128,6 +2250,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalAPIBaseURL := apiBaseURL
 	originalHTTPClient := httpClient
 	originalCurrentExecutable := currentExecutable
+	originalHostGOOS := hostGOOS
 	originalCreateTempDir := createTempDir
 	originalCreateDirs := createDirs
 	originalRemoveAllPaths := removeAllPaths
@@ -2137,6 +2260,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalWriteTextFile := writeTextFile
 	originalStartOSProcess := startOSProcess
 	originalLookPath := lookPath
+	originalRunCommandOutput := runCommandOutput
 	originalStartAsync := startAsync
 	originalRunCheckAndApply := runCheckAndApply
 	originalRunCheckStatus := runCheckStatus
@@ -2158,6 +2282,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	httpClient = &http.Client{Timeout: time.Second}
 	currentVersion = version.Get
 	currentExecutable = os.Executable
+	hostGOOS = runtime.GOOS
 	createTempDir = os.MkdirTemp
 	createDirs = os.MkdirAll
 	removeAllPaths = os.RemoveAll
@@ -2167,6 +2292,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	writeTextFile = os.WriteFile
 	startOSProcess = os.StartProcess
 	lookPath = exec.LookPath
+	runCommandOutput = func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() }
 	startAsync = startAsyncDefault
 	runCheckAndApply = CheckAndApply
 	runCheckStatus = CheckStatus
@@ -2188,6 +2314,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 		httpClient = originalHTTPClient
 		currentVersion = originalCurrentVersion
 		currentExecutable = originalCurrentExecutable
+		hostGOOS = originalHostGOOS
 		createTempDir = originalCreateTempDir
 		createDirs = originalCreateDirs
 		removeAllPaths = originalRemoveAllPaths
@@ -2197,6 +2324,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 		writeTextFile = originalWriteTextFile
 		startOSProcess = originalStartOSProcess
 		lookPath = originalLookPath
+		runCommandOutput = originalRunCommandOutput
 		startAsync = originalStartAsync
 		runCheckAndApply = originalRunCheckAndApply
 		runCheckStatus = originalRunCheckStatus

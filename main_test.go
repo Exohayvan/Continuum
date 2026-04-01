@@ -41,10 +41,12 @@ func TestBuildOptionsUsesExpectedShell(t *testing.T) {
 func TestRunAppCreatesBackendAndStartsWails(t *testing.T) {
 	originalNewApplication := newApplication
 	originalEnsureDataLayout := ensureDataLayout
+	originalEnsureBundleReadyOnStartup := ensureBundleReadyOnStartup
 	originalStartWails := startWails
 	t.Cleanup(func() {
 		newApplication = originalNewApplication
 		ensureDataLayout = originalEnsureDataLayout
+		ensureBundleReadyOnStartup = originalEnsureBundleReadyOnStartup
 		startWails = originalStartWails
 	})
 
@@ -54,6 +56,11 @@ func TestRunAppCreatesBackendAndStartsWails(t *testing.T) {
 	ensureDataLayout = func() (string, error) {
 		ensureCalled = true
 		return "/tmp/data", nil
+	}
+	ensureBundleReadyCalled := false
+	ensureBundleReadyOnStartup = func() error {
+		ensureBundleReadyCalled = true
+		return nil
 	}
 
 	called := false
@@ -86,14 +93,20 @@ func TestRunAppCreatesBackendAndStartsWails(t *testing.T) {
 	if !ensureCalled {
 		t.Fatal("runApp() did not ensure the data layout")
 	}
+
+	if !ensureBundleReadyCalled {
+		t.Fatal("runApp() did not ensure the app bundle was startup-ready")
+	}
 }
 
 func TestRunAppReturnsDataLayoutError(t *testing.T) {
 	originalEnsureDataLayout := ensureDataLayout
+	originalEnsureBundleReadyOnStartup := ensureBundleReadyOnStartup
 	originalNewApplication := newApplication
 	originalStartWails := startWails
 	t.Cleanup(func() {
 		ensureDataLayout = originalEnsureDataLayout
+		ensureBundleReadyOnStartup = originalEnsureBundleReadyOnStartup
 		newApplication = originalNewApplication
 		startWails = originalStartWails
 	})
@@ -111,10 +124,59 @@ func TestRunAppReturnsDataLayoutError(t *testing.T) {
 		t.Fatal("runApp() started Wails after data layout failed")
 		return nil
 	}
+	ensureBundleReadyOnStartup = func() error {
+		t.Fatal("runApp() ensured bundle readiness after data layout failed")
+		return nil
+	}
 
 	err := runApp()
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("runApp() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestRunAppContinuesWhenBundleReadyCheckFails(t *testing.T) {
+	originalNewApplication := newApplication
+	originalEnsureDataLayout := ensureDataLayout
+	originalEnsureBundleReadyOnStartup := ensureBundleReadyOnStartup
+	originalStartWails := startWails
+	originalStderrWriter := stderrWriter
+	t.Cleanup(func() {
+		newApplication = originalNewApplication
+		ensureDataLayout = originalEnsureDataLayout
+		ensureBundleReadyOnStartup = originalEnsureBundleReadyOnStartup
+		startWails = originalStartWails
+		stderrWriter = originalStderrWriter
+	})
+
+	ensureDataLayout = func() (string, error) {
+		return "/tmp/data", nil
+	}
+
+	wantErr := errors.New("quarantine cleanup failed")
+	ensureBundleReadyOnStartup = func() error {
+		return wantErr
+	}
+
+	var errOut bytes.Buffer
+	stderrWriter = &errOut
+
+	started := false
+	startWails = func(*options.App) error {
+		started = true
+		return nil
+	}
+
+	if err := runApp(); err != nil {
+		t.Fatalf("runApp() error = %v", err)
+	}
+
+	if !started {
+		t.Fatal("runApp() did not start Wails after startup bundle check failed")
+	}
+
+	if got := errOut.String(); got != "quarantine cleanup failed\n" {
+		t.Fatalf("stderr = %q, want %q", got, "quarantine cleanup failed\n")
 	}
 }
 
