@@ -111,12 +111,19 @@ func TestSnapshotReportsManagedUsageAndThroughput(t *testing.T) {
 	resetDataManagerTestState(t)
 
 	root := t.TempDir()
+	appPath := filepath.Join(root, "Continuum")
 	dataPath := filepath.Join(root, "data")
+	if err := os.WriteFile(appPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(dataPath, "network", "stats"), directoryMode); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
 	managerState.setDataPath(dataPath)
+	currentExecutable = func() (string, error) {
+		return appPath, nil
+	}
 	createDirectory = os.MkdirAll
 	readManagedFile = os.ReadFile
 	writeManagedFile = os.WriteFile
@@ -146,8 +153,17 @@ func TestSnapshotReportsManagedUsageAndThroughput(t *testing.T) {
 	if snapshot.DataPath != dataPath {
 		t.Fatalf("Snapshot().DataPath = %q, want %q", snapshot.DataPath, dataPath)
 	}
+	if snapshot.AppPath != appPath {
+		t.Fatalf("Snapshot().AppPath = %q, want %q", snapshot.AppPath, appPath)
+	}
+	if snapshot.AppBytes != uint64(len("binary")) {
+		t.Fatalf("Snapshot().AppBytes = %d, want %d", snapshot.AppBytes, len("binary"))
+	}
 	if snapshot.DataBytes != uint64(len(testFileData)) {
 		t.Fatalf("Snapshot().DataBytes = %d, want %d", snapshot.DataBytes, len(testFileData))
+	}
+	if snapshot.TotalBytes != uint64(len("binary")+len(testFileData)) {
+		t.Fatalf("Snapshot().TotalBytes = %d, want %d", snapshot.TotalBytes, len("binary")+len(testFileData))
 	}
 	if snapshot.VolumeBytes != 1024 {
 		t.Fatalf("Snapshot().VolumeBytes = %d, want %d", snapshot.VolumeBytes, 1024)
@@ -166,6 +182,9 @@ func TestSnapshotReportsManagedUsageAndThroughput(t *testing.T) {
 func TestSnapshotReturnsDirectorySizeError(t *testing.T) {
 	resetDataManagerTestState(t)
 
+	currentExecutable = func() (string, error) {
+		return filepath.Join(t.TempDir(), "Continuum"), nil
+	}
 	managerState.setDataPath(t.TempDir())
 	wantErr := errors.New("walk failed")
 	walkManagedPath = func(string, fs.WalkDirFunc) error {
@@ -182,6 +201,13 @@ func TestSnapshotReturnsFilesystemError(t *testing.T) {
 	resetDataManagerTestState(t)
 
 	root := t.TempDir()
+	appPath := filepath.Join(root, "Continuum")
+	if err := os.WriteFile(appPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	currentExecutable = func() (string, error) {
+		return appPath, nil
+	}
 	managerState.setDataPath(root)
 	walkManagedPath = filepath.WalkDir
 	statFilesystem = func(string) (uint64, error) {
@@ -191,6 +217,21 @@ func TestSnapshotReturnsFilesystemError(t *testing.T) {
 	_, err := Snapshot()
 	if err == nil || err.Error() != "statfs failed" {
 		t.Fatalf("Snapshot() error = %v, want statfs failure", err)
+	}
+}
+
+func TestSnapshotReturnsExecutableError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	managerState.setDataPath(t.TempDir())
+	wantErr := errors.New("missing executable")
+	currentExecutable = func() (string, error) {
+		return "", wantErr
+	}
+
+	_, err := Snapshot()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -301,6 +342,22 @@ func TestAppDirectoryUsesBundleParent(t *testing.T) {
 	want := "/Applications"
 	if got != want {
 		t.Fatalf("appDirectory() = %q, want %q", got, want)
+	}
+}
+
+func TestInstallPathUsesExecutablePathOutsideBundle(t *testing.T) {
+	got := installPath(filepath.Join("/tmp", "continuum", "Continuum"))
+	want := filepath.Join("/tmp", "continuum", "Continuum")
+	if got != want {
+		t.Fatalf("installPath() = %q, want %q", got, want)
+	}
+}
+
+func TestInstallPathUsesBundleRoot(t *testing.T) {
+	got := installPath(filepath.Join("/Applications", "Continuum.app", "Contents", "MacOS", "Continuum"))
+	want := filepath.Join("/Applications", "Continuum.app")
+	if got != want {
+		t.Fatalf("installPath() = %q, want %q", got, want)
 	}
 }
 

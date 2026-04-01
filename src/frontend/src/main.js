@@ -90,7 +90,7 @@ function formatDiskUsage(snapshot) {
         return defaultPlaceholder;
     }
 
-    return `${formatBytes(snapshot.dataBytes)} / ${formatBytes(snapshot.volumeBytes)} (${formatPercent(snapshot.usagePercent)}) • R ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s • W ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s`;
+    return `${formatBytes(snapshot.totalBytes)} total (${formatBytes(snapshot.appBytes)} app + ${formatBytes(snapshot.dataBytes)} data) / ${formatBytes(snapshot.volumeBytes)} (${formatPercent(snapshot.usagePercent)}) • R ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s • W ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s`;
 }
 
 function formatBandwidthUsage(snapshot) {

@@ -53,10 +53,14 @@ type trackedState struct {
 	transfers []transferEvent
 }
 
-// DiskUsage captures the current managed-data size and recent disk throughput.
+// DiskUsage captures the current installed-app plus managed-data size and recent
+// disk throughput.
 type DiskUsage struct {
+	AppPath      string  `json:"appPath"`
 	DataPath     string  `json:"dataPath"`
+	AppBytes     uint64  `json:"appBytes"`
 	DataBytes    uint64  `json:"dataBytes"`
+	TotalBytes   uint64  `json:"totalBytes"`
 	VolumeBytes  uint64  `json:"volumeBytes"`
 	UsagePercent float64 `json:"usagePercent"`
 	ReadMbps     float64 `json:"readMbps"`
@@ -83,15 +87,27 @@ func EnsureLayout() (string, error) {
 	return dataPath, nil
 }
 
-// Snapshot returns the current managed-data size, recent read/write throughput,
-// and the percentage of the hosting volume consumed by the managed data.
+// Snapshot returns the current installed-app plus managed-data size, recent
+// read/write throughput, and the percentage of the hosting volume consumed by
+// Continuum storage overall.
 func Snapshot() (DiskUsage, error) {
 	dataPath, err := dataRoot()
 	if err != nil {
 		return DiskUsage{}, err
 	}
 
-	dataBytes, err := directorySize(dataPath)
+	executablePath, err := currentExecutable()
+	if err != nil {
+		return DiskUsage{}, err
+	}
+
+	appPath := installPath(executablePath)
+	appBytes, err := pathSize(appPath)
+	if err != nil {
+		return DiskUsage{}, err
+	}
+
+	dataBytes, err := pathSize(dataPath)
 	if err != nil {
 		return DiskUsage{}, err
 	}
@@ -102,14 +118,18 @@ func Snapshot() (DiskUsage, error) {
 	}
 
 	readBytes, writeBytes := managerState.transferTotals(currentTime())
+	totalBytes := appBytes + dataBytes
 	usagePercent := 0.0
 	if volumeBytes > 0 {
-		usagePercent = (float64(dataBytes) / float64(volumeBytes)) * 100
+		usagePercent = (float64(totalBytes) / float64(volumeBytes)) * 100
 	}
 
 	return DiskUsage{
+		AppPath:      appPath,
 		DataPath:     dataPath,
+		AppBytes:     appBytes,
 		DataBytes:    dataBytes,
+		TotalBytes:   totalBytes,
 		VolumeBytes:  volumeBytes,
 		UsagePercent: usagePercent,
 		ReadMbps:     bytesPerSecondToMegabits(readBytes, throughputWindow),
@@ -172,6 +192,17 @@ func appDirectory(executablePath string) string {
 	return filepath.Dir(appBundle)
 }
 
+func installPath(executablePath string) string {
+	cleanPath := filepath.Clean(executablePath)
+	appMarker := ".app" + string(os.PathSeparator)
+	appIndex := strings.Index(cleanPath, appMarker)
+	if appIndex == -1 {
+		return cleanPath
+	}
+
+	return cleanPath[:appIndex+4]
+}
+
 func managedPath(relativePath string) (string, error) {
 	dataPath, err := dataRoot()
 	if err != nil {
@@ -201,7 +232,7 @@ func dataRoot() (string, error) {
 	return EnsureLayout()
 }
 
-func directorySize(root string) (uint64, error) {
+func pathSize(root string) (uint64, error) {
 	var total uint64
 	err := walkManagedPath(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {

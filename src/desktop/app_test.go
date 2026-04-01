@@ -202,8 +202,11 @@ func TestVersionReturnsResolvedValue(t *testing.T) {
 func TestDiskUsageReturnsResolvedValue(t *testing.T) {
 	originalResolveDiskUsage := resolveDiskUsage
 	want := datamanager.DiskUsage{
+		AppPath:      "/tmp/continuum/Continuum",
 		DataPath:     "/tmp/continuum/data",
+		AppBytes:     128,
 		DataBytes:    256,
+		TotalBytes:   384,
 		VolumeBytes:  1024,
 		UsagePercent: 25,
 		ReadMbps:     1.25,
