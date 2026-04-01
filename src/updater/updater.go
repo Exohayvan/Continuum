@@ -27,6 +27,7 @@ const (
 	RepoName             = "Continuum"
 	AppName              = "Continuum"
 	DefaultCheckInterval = 5 * time.Minute
+	wrappedErrorFormat   = "%w: %s"
 )
 
 type Asset struct {
@@ -267,7 +268,7 @@ func resolveUpdateAsset(ctx context.Context, current version.Value, goos, goarch
 		}
 	}
 
-	return "", "", false, fmt.Errorf("%w: %s", errNoMatchingAsset, strings.Join(buildAssetNames(latest.TagName, goos, goarch), ", "))
+	return "", "", false, fmt.Errorf(wrappedErrorFormat, errNoMatchingAsset, strings.Join(buildAssetNames(latest.TagName, goos, goarch), ", "))
 }
 
 func fetchReleases(ctx context.Context, baseURL string, client *http.Client, owner, repo string) ([]Release, error) {
@@ -413,7 +414,7 @@ func findAssetURL(release Release, assetName string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("%w: %s", errNoMatchingAsset, assetName)
+	return "", fmt.Errorf(wrappedErrorFormat, errNoMatchingAsset, assetName)
 }
 
 func downloadReleaseAsset(ctx context.Context, client *http.Client, url, destination string) error {
@@ -526,7 +527,7 @@ func archiveTarget(destination, entryName string) (string, error) {
 
 	prefix := cleanDestination + string(os.PathSeparator)
 	if !strings.HasPrefix(cleanTarget, prefix) {
-		return "", fmt.Errorf("%w: %s", errPathTraversal, entryName)
+		return "", fmt.Errorf(wrappedErrorFormat, errPathTraversal, entryName)
 	}
 
 	return cleanTarget, nil
