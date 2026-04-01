@@ -787,6 +787,14 @@ func TestReplaceAppBundle(t *testing.T) {
 	if _, err := os.Stat(currentBundle + ".bak"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replaceAppBundle() left a .bak bundle behind: %v", err)
 	}
+
+	if _, err := os.Stat(bundleTempPath(currentBundle, ".incoming")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaceAppBundle() left incoming bundle behind: %v", err)
+	}
+
+	if _, err := os.Stat(bundleTempPath(currentBundle, ".previous")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaceAppBundle() left previous bundle behind: %v", err)
+	}
 }
 
 func TestReplaceAppBundleFailure(t *testing.T) {
@@ -857,9 +865,50 @@ func TestReplaceAppBundleInitialRenameFailure(t *testing.T) {
 		t.Fatal("replaceAppBundle() error = nil, want initial rename failure")
 	}
 
-	stagedBundle := siblingTempPath(currentBundle, ".incoming")
+	stagedBundle := bundleTempPath(currentBundle, ".incoming")
 	if _, err := os.Stat(stagedBundle); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replaceAppBundle() left staged bundle behind: %v", err)
+	}
+}
+
+func TestReplaceAppBundleNormalizesHiddenCurrentBundle(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	currentBundle := filepath.Join(root, "."+AppName+".app")
+	currentExec := filepath.Join(currentBundle, "Contents", "MacOS", AppName)
+	replacementBundle := filepath.Join(root, "download", AppName+".app")
+	replacementExec := filepath.Join(replacementBundle, "Contents", "MacOS", AppName)
+	visibleBundle := filepath.Join(root, AppName+".app")
+	visibleExec := filepath.Join(visibleBundle, "Contents", "MacOS", AppName)
+
+	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	got, err := replaceAppBundle(currentExec, replacementBundle)
+	if err != nil {
+		t.Fatalf("replaceAppBundle() error = %v", err)
+	}
+
+	if got != visibleExec {
+		t.Fatalf("replaceAppBundle() = %q, want %q", got, visibleExec)
+	}
+
+	if _, err := os.Stat(visibleExec); err != nil {
+		t.Fatalf("Stat(%q) error = %v", visibleExec, err)
+	}
+	if _, err := os.Stat(currentBundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaceAppBundle() left hidden current bundle behind: %v", err)
 	}
 }
 
@@ -1153,6 +1202,37 @@ func TestRelaunchBinaryError(t *testing.T) {
 
 	if err := relaunchBinary(tmpContinuumBinary); err == nil {
 		t.Fatal("relaunchBinary() error = nil, want start failure")
+	}
+}
+
+func TestRelaunchBinaryUsesOpenForAppBundle(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	appBinary := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
+	called := false
+	startOSProcess = func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
+		called = true
+
+		if name != "open" {
+			t.Fatalf(processMismatchFormat, name, "open")
+		}
+		if len(argv) != 3 || argv[0] != "open" || argv[1] != "-n" || argv[2] != filepath.Join("/Applications", AppName+".app") {
+			t.Fatalf("argv = %q, want open -n %q", argv, filepath.Join("/Applications", AppName+".app"))
+		}
+		if attr == nil || attr.Dir != "/Applications" {
+			t.Fatalf("Dir = %q, want %q", attr.Dir, "/Applications")
+		}
+
+		return os.FindProcess(os.Getpid())
+	}
+
+	if err := relaunchBinary(appBinary); err != nil {
+		t.Fatalf("relaunchBinary() error = %v", err)
+	}
+
+	if !called {
+		t.Fatal("relaunchBinary() did not use open for app bundle relaunch")
 	}
 }
 

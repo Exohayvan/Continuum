@@ -654,8 +654,9 @@ func replaceAppBundle(currentExecutablePath, replacementBundle string) (string, 
 		return "", err
 	}
 
-	stagedBundle := siblingTempPath(currentBundle, ".incoming")
-	previousBundle := siblingTempPath(currentBundle, ".previous")
+	targetBundle := visibleAppBundlePath(currentBundle)
+	stagedBundle := bundleTempPath(targetBundle, ".incoming")
+	previousBundle := bundleTempPath(targetBundle, ".previous")
 	_ = removeAllPaths(stagedBundle)
 	_ = removeAllPaths(previousBundle)
 
@@ -668,18 +669,30 @@ func replaceAppBundle(currentExecutablePath, replacementBundle string) (string, 
 		return "", err
 	}
 
-	if err := renamePath(stagedBundle, currentBundle); err != nil {
-		_ = renamePath(previousBundle, currentBundle)
+	if err := renamePath(stagedBundle, targetBundle); err != nil {
+		_ = renamePath(previousBundle, targetBundle)
 		_ = removeAllPaths(stagedBundle)
 		return "", err
 	}
 
 	_ = removeAllPaths(previousBundle)
-	return filepath.Join(currentBundle, "Contents", "MacOS", filepath.Base(currentExecutablePath)), nil
+	return filepath.Join(targetBundle, "Contents", "MacOS", filepath.Base(currentExecutablePath)), nil
 }
 
 func siblingTempPath(path, suffix string) string {
 	return filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+suffix)
+}
+
+func bundleTempPath(path, suffix string) string {
+	return path + suffix
+}
+
+func visibleAppBundlePath(path string) string {
+	dir := filepath.Dir(path)
+	base := strings.TrimPrefix(filepath.Base(path), ".")
+	base = strings.TrimSuffix(base, ".incoming")
+	base = strings.TrimSuffix(base, ".previous")
+	return filepath.Join(dir, base)
 }
 
 func copyFile(sourcePath, destinationPath string) error {
@@ -787,6 +800,22 @@ func windowsUpdateScript(currentPath, replacementPath string) string {
 }
 
 func relaunchBinary(path string) error {
+	if bundlePath, err := appBundleRoot(path); err == nil {
+		visibleBundle := visibleAppBundlePath(bundlePath)
+		attr := &os.ProcAttr{
+			Dir:   filepath.Dir(visibleBundle),
+			Env:   os.Environ(),
+			Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+		}
+
+		proc, err := startOSProcess("open", []string{"open", "-n", visibleBundle}, attr)
+		if err != nil {
+			return err
+		}
+
+		return proc.Release()
+	}
+
 	attr := &os.ProcAttr{
 		Dir:   filepath.Dir(path),
 		Env:   os.Environ(),
