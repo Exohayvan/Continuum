@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"continuum/src/datamanager"
 	"continuum/src/desktop"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -16,10 +17,11 @@ import (
 var assets embed.FS
 
 var (
-	newApplication           = desktop.NewApp
-	startWails               = wails.Run
-	runApplication           = runApp
-	stderrWriter   io.Writer = os.Stderr
+	newApplication             = desktop.NewApp
+	ensureDataLayout           = datamanager.EnsureLayout
+	startWails                 = wails.Run
+	runApplication             = runApp
+	stderrWriter     io.Writer = os.Stderr
 )
 
 func buildOptions(app *desktop.App) *options.App {
@@ -41,6 +43,10 @@ func buildOptions(app *desktop.App) *options.App {
 }
 
 func runApp() error {
+	if _, err := ensureDataLayout(); err != nil {
+		return err
+	}
+
 	app := newApplication()
 	return startWails(buildOptions(app))
 }

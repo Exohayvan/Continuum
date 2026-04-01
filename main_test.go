@@ -40,14 +40,21 @@ func TestBuildOptionsUsesExpectedShell(t *testing.T) {
 
 func TestRunAppCreatesBackendAndStartsWails(t *testing.T) {
 	originalNewApplication := newApplication
+	originalEnsureDataLayout := ensureDataLayout
 	originalStartWails := startWails
 	t.Cleanup(func() {
 		newApplication = originalNewApplication
+		ensureDataLayout = originalEnsureDataLayout
 		startWails = originalStartWails
 	})
 
 	app := desktop.NewApp()
 	newApplication = func() *desktop.App { return app }
+	ensureCalled := false
+	ensureDataLayout = func() (string, error) {
+		ensureCalled = true
+		return "/tmp/data", nil
+	}
 
 	called := false
 	startWails = func(opts *options.App) error {
@@ -74,6 +81,40 @@ func TestRunAppCreatesBackendAndStartsWails(t *testing.T) {
 
 	if !called {
 		t.Fatal("runApp() did not call startWails")
+	}
+
+	if !ensureCalled {
+		t.Fatal("runApp() did not ensure the data layout")
+	}
+}
+
+func TestRunAppReturnsDataLayoutError(t *testing.T) {
+	originalEnsureDataLayout := ensureDataLayout
+	originalNewApplication := newApplication
+	originalStartWails := startWails
+	t.Cleanup(func() {
+		ensureDataLayout = originalEnsureDataLayout
+		newApplication = originalNewApplication
+		startWails = originalStartWails
+	})
+
+	wantErr := errors.New("data setup failed")
+	ensureDataLayout = func() (string, error) {
+		return "", wantErr
+	}
+
+	newApplication = func() *desktop.App {
+		t.Fatal("runApp() created the app after data layout failed")
+		return nil
+	}
+	startWails = func(*options.App) error {
+		t.Fatal("runApp() started Wails after data layout failed")
+		return nil
+	}
+
+	err := runApp()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runApp() error = %v, want %v", err, wantErr)
 	}
 }
 
