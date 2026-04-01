@@ -318,7 +318,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          archive_name="${{ matrix.artifact_name }}-${{ needs.prepare_release.outputs.release_tag }}.tar.gz"
+          release_asset_name="${{ matrix.artifact_name }}"
+          release_asset_name="${release_asset_name/darwin/macos}"
+          archive_name="${release_asset_name}-${{ needs.prepare_release.outputs.release_tag }}.tar.gz"
           tar -czf "dist/${archive_name}" -C build/bin .
 
       - name: Upload build artifact
