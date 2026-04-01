@@ -1184,9 +1184,9 @@ func TestStartBackgroundRunsLoop(t *testing.T) {
 	close(tickChannel)
 
 	startAsync = func(fn func()) { fn() }
-	runCheckAndApply = func() error {
+	runCheckStatus = func() Status {
 		calls++
-		return nil
+		return Status{}
 	}
 	newLoopTicker = func(time.Duration) loopTicker {
 		return fakeTicker{channel: tickChannel}
@@ -1195,7 +1195,42 @@ func TestStartBackgroundRunsLoop(t *testing.T) {
 	StartBackground()
 
 	if calls != 1 {
-		t.Fatalf("StartBackground() runCheckAndApply calls = %d, want %d", calls, 1)
+		t.Fatalf("StartBackground() runCheckStatus calls = %d, want %d", calls, 1)
+	}
+}
+
+func TestStartBackgroundPublishesStatus(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	startOnce = sync.Once{}
+	tickChannel := make(chan time.Time)
+	close(tickChannel)
+	want := Status{
+		CurrentVersion: "1.5.0",
+		RemoteVersion:  "v1.6.0",
+		UpdateRequired: true,
+	}
+	var got Status
+	published := 0
+
+	startAsync = func(fn func()) { fn() }
+	runCheckStatus = func() Status { return want }
+	SetStatusObserver(func(status Status) {
+		got = status
+		published++
+	})
+	newLoopTicker = func(time.Duration) loopTicker {
+		return fakeTicker{channel: tickChannel}
+	}
+
+	StartBackground()
+
+	if published != 1 {
+		t.Fatalf("StartBackground() published = %d, want %d", published, 1)
+	}
+	if got != want {
+		t.Fatalf("StartBackground() status = %#v, want %#v", got, want)
 	}
 }
 
@@ -1401,9 +1436,9 @@ func TestRunLoop(t *testing.T) {
 	close(tickChannel)
 
 	var gotInterval time.Duration
-	runCheckAndApply = func() error {
+	runCheckStatus = func() Status {
 		calls++
-		return nil
+		return Status{}
 	}
 	newLoopTicker = func(interval time.Duration) loopTicker {
 		gotInterval = interval
@@ -1418,6 +1453,46 @@ func TestRunLoop(t *testing.T) {
 
 	if calls != 2 {
 		t.Fatalf("runLoop() calls = %d, want %d", calls, 2)
+	}
+}
+
+func TestRunLoopPublishesStatusOnEachTick(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	startOnce = sync.Once{}
+	tickChannel := make(chan time.Time, 1)
+	tickChannel <- time.Now()
+	close(tickChannel)
+
+	statuses := []Status{
+		{CurrentVersion: "1.0.0", RemoteVersion: "v1.0.0"},
+		{CurrentVersion: "1.0.0", RemoteVersion: "v1.1.0", UpdateRequired: true},
+	}
+	statusIndex := 0
+	published := make([]Status, 0, 2)
+
+	runCheckStatus = func() Status {
+		status := statuses[statusIndex]
+		if statusIndex < len(statuses)-1 {
+			statusIndex++
+		}
+		return status
+	}
+	SetStatusObserver(func(status Status) {
+		published = append(published, status)
+	})
+	newLoopTicker = func(time.Duration) loopTicker {
+		return fakeTicker{channel: tickChannel}
+	}
+
+	runLoop(DefaultCheckInterval)
+
+	if len(published) != 2 {
+		t.Fatalf("runLoop() published = %d, want %d", len(published), 2)
+	}
+	if published[0] != statuses[0] || published[1] != statuses[1] {
+		t.Fatalf("runLoop() published = %#v, want %#v", published, statuses)
 	}
 }
 
@@ -1962,6 +2037,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalStartOSProcess := startOSProcess
 	originalStartAsync := startAsync
 	originalRunCheckAndApply := runCheckAndApply
+	originalRunCheckStatus := runCheckStatus
 	originalNewLoopTicker := newLoopTicker
 	originalResolveAsset := resolveAsset
 	originalDownloadAsset := downloadAsset
@@ -1974,6 +2050,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalCurrentVersion := currentVersion
 	originalLatestRemoteVersion := latestRemoteVersion
 	originalLatestUpdateError := latestUpdateError
+	originalStatusObserver := statusObserver
 
 	apiBaseURL = "https://api.github.com"
 	httpClient = &http.Client{Timeout: time.Second}
@@ -1989,6 +2066,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	startOSProcess = os.StartProcess
 	startAsync = startAsyncDefault
 	runCheckAndApply = CheckAndApply
+	runCheckStatus = CheckStatus
 	newLoopTicker = defaultLoopTicker
 	resolveAsset = resolveUpdateAsset
 	downloadAsset = downloadReleaseAsset
@@ -2017,6 +2095,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 		startOSProcess = originalStartOSProcess
 		startAsync = originalStartAsync
 		runCheckAndApply = originalRunCheckAndApply
+		runCheckStatus = originalRunCheckStatus
 		newLoopTicker = originalNewLoopTicker
 		resolveAsset = originalResolveAsset
 		downloadAsset = originalDownloadAsset
@@ -2033,6 +2112,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 		} else {
 			storeUpdateError(errors.New(originalLatestUpdateError))
 		}
+		SetStatusObserver(originalStatusObserver)
 	}
 }
 

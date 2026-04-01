@@ -26,13 +26,25 @@ func TestNewAppReturnsEmptyBackend(t *testing.T) {
 
 func TestStartupAcceptsContext(t *testing.T) {
 	originalQuitApplication := quitApplication
+	originalObserveUpdateStatus := observeUpdateStatus
+	originalStartUpdaterLoop := startUpdaterLoop
 	received := context.Context(nil)
+	var observed func(updater.Status)
+	startedUpdater := false
 	quitApplication = func(ctx context.Context) {
 		received = ctx
 	}
 	t.Cleanup(func() {
 		quitApplication = originalQuitApplication
+		observeUpdateStatus = originalObserveUpdateStatus
+		startUpdaterLoop = originalStartUpdaterLoop
 	})
+	observeUpdateStatus = func(fn func(updater.Status)) {
+		observed = fn
+	}
+	startUpdaterLoop = func() {
+		startedUpdater = true
+	}
 
 	app := NewApp()
 	ctx := context.WithValue(context.Background(), testContextKey("suite"), "continuum")
@@ -42,6 +54,69 @@ func TestStartupAcceptsContext(t *testing.T) {
 
 	if received != ctx {
 		t.Fatal("Startup() did not wire quit handler with the provided context")
+	}
+	if observed == nil {
+		t.Fatal("Startup() did not register updater status observer")
+	}
+	if !startedUpdater {
+		t.Fatal("Startup() did not start updater background loop")
+	}
+}
+
+func TestStartupEmitsUpdaterStatusEvents(t *testing.T) {
+	originalObserveUpdateStatus := observeUpdateStatus
+	originalStartUpdaterLoop := startUpdaterLoop
+	originalEmitRuntimeEvent := emitRuntimeEvent
+	ctx := context.WithValue(context.Background(), testContextKey("suite"), "continuum")
+	var observed func(updater.Status)
+	eventName := ""
+	var eventPayload updater.Status
+
+	observeUpdateStatus = func(fn func(updater.Status)) {
+		observed = fn
+	}
+	startUpdaterLoop = func() {}
+	emitRuntimeEvent = func(got context.Context, name string, optionalData ...interface{}) {
+		if got != ctx {
+			t.Fatal("emitRuntimeEvent() received unexpected context")
+		}
+		eventName = name
+		if len(optionalData) != 1 {
+			t.Fatalf("emitRuntimeEvent() data len = %d, want 1", len(optionalData))
+		}
+
+		payload, ok := optionalData[0].(updater.Status)
+		if !ok {
+			t.Fatalf("emitRuntimeEvent() payload type = %T, want updater.Status", optionalData[0])
+		}
+		eventPayload = payload
+	}
+	t.Cleanup(func() {
+		observeUpdateStatus = originalObserveUpdateStatus
+		startUpdaterLoop = originalStartUpdaterLoop
+		emitRuntimeEvent = originalEmitRuntimeEvent
+	})
+
+	app := NewApp()
+	app.Startup(ctx)
+
+	if observed == nil {
+		t.Fatal("Startup() did not register updater status observer")
+	}
+
+	want := updater.Status{
+		CurrentVersion: testVersion,
+		RemoteVersion:  testRemoteVersion,
+		UpdateRequired: true,
+		UpdateError:    testUpdateError,
+	}
+	observed(want)
+
+	if eventName != "updater:status" {
+		t.Fatalf("emitRuntimeEvent() name = %q, want %q", eventName, "updater:status")
+	}
+	if eventPayload != want {
+		t.Fatalf("emitRuntimeEvent() payload = %#v, want %#v", eventPayload, want)
 	}
 }
 

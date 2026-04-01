@@ -68,6 +68,7 @@ var (
 	startOSProcess    = os.StartProcess
 	startAsync        = startAsyncDefault
 	runCheckAndApply  = CheckAndApply
+	runCheckStatus    = CheckStatus
 	newLoopTicker     = defaultLoopTicker
 	resolveAsset      = resolveUpdateAsset
 	downloadAsset     = downloadReleaseAsset
@@ -83,6 +84,8 @@ var (
 	latestRemoteVersion string
 	updateErrorMu       sync.RWMutex
 	latestUpdateError   string
+	statusObserverMu    sync.RWMutex
+	statusObserver      func(Status)
 )
 
 type loopTicker interface {
@@ -112,6 +115,14 @@ func StartBackground() {
 			runLoop(DefaultCheckInterval)
 		})
 	})
+}
+
+// SetStatusObserver registers a callback for background status refreshes.
+func SetStatusObserver(observer func(Status)) {
+	statusObserverMu.Lock()
+	defer statusObserverMu.Unlock()
+
+	statusObserver = observer
 }
 
 func CheckAndApply() error {
@@ -147,13 +158,23 @@ func runLoop(interval time.Duration) {
 		interval = DefaultCheckInterval
 	}
 
-	_ = runCheckAndApply()
+	notifyStatus(runCheckStatus())
 
 	ticker := newLoopTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.Chan() {
-		_ = runCheckAndApply()
+		notifyStatus(runCheckStatus())
+	}
+}
+
+func notifyStatus(status Status) {
+	statusObserverMu.RLock()
+	observer := statusObserver
+	statusObserverMu.RUnlock()
+
+	if observer != nil {
+		observer(status)
 	}
 }
 

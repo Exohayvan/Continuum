@@ -11,7 +11,6 @@ const fieldElements = new Map(
 const appBridge = globalThis.go.desktop.App;
 const runtimeBridge = globalThis.runtime;
 const updateCountdownSeconds = 15;
-const updateCheckIntervalMs = 30 * 60 * 1000;
 const diskUsageRefreshIntervalMs = 2000;
 const defaultPlaceholder = "Pending";
 const dashboardEventBindings = [
@@ -21,7 +20,6 @@ const dashboardEventBindings = [
 ];
 
 let updateCountdownTimer = null;
-let updateCheckTimer = null;
 let diskUsageTimer = null;
 let countdownRemaining = updateCountdownSeconds;
 let pendingUpdateStatus = null;
@@ -103,6 +101,11 @@ function formatBandwidthUsage(snapshot) {
     return `Up ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s • Down ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s`;
 }
 
+function applyUpdateStatus(updateStatus) {
+    versionElement.textContent = `${formatVersion(updateStatus.currentVersion)} (remote ${formatVersion(updateStatus.remoteVersion)})`;
+    syncUpdateModal(updateStatus);
+}
+
 function applySectionUpdate(section, payload) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         return;
@@ -158,6 +161,23 @@ function bindDashboardEvents() {
             applySnapshot(normalizeEventPayload(eventData));
         }, -1),
     );
+
+    dashboardEventUnsubscribers.push(
+        runtimeBridge.EventsOnMultiple("updater:status", (...eventData) => {
+            const updateStatus = normalizeEventPayload(eventData);
+            if (!("currentVersion" in updateStatus) || !("remoteVersion" in updateStatus)) {
+                return;
+            }
+
+            applyUpdateStatus(updateStatus);
+            if (updateStatus.updateRequired) {
+                statusElement.textContent = updateStatus.updateError ? "Update failed" : "Update available";
+                return;
+            }
+
+            statusElement.textContent = "Dashboard ready";
+        }, -1),
+    );
 }
 
 function releaseDashboardEvents() {
@@ -182,8 +202,7 @@ async function loadShellState() {
         setMetric("node.nodeId", nodeID);
         await loadDiskUsage();
         await loadBandwidthUsage();
-        versionElement.textContent = `${formatVersion(updateStatus.currentVersion)} (remote ${formatVersion(updateStatus.remoteVersion)})`;
-        syncUpdateModal(updateStatus);
+        applyUpdateStatus(updateStatus);
         statusElement.textContent = "Dashboard ready";
     } catch (error) {
         setMetric("node.nodeId", "Unable to load NodeID");
@@ -376,16 +395,6 @@ async function exitApplication() {
     await appBridge.Exit();
 }
 
-function startUpdateChecks() {
-    if (updateCheckTimer !== null) {
-        return;
-    }
-
-    updateCheckTimer = globalThis.setInterval(() => {
-        void loadShellState();
-    }, updateCheckIntervalMs);
-}
-
 function startDiskUsageChecks() {
     if (diskUsageTimer !== null) {
         return;
@@ -410,5 +419,4 @@ globalThis.addEventListener("beforeunload", releaseDashboardEvents);
 
 bindDashboardEvents();
 await loadShellState();
-startUpdateChecks();
 startDiskUsageChecks();

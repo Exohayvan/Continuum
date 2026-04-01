@@ -19,7 +19,10 @@ var (
 	resolveVersion       = version.Get
 	resolveRemoteVersion = updater.RemoteVersion
 	resolveUpdateStatus  = updater.CheckStatus
+	observeUpdateStatus  = updater.SetStatusObserver
+	startUpdaterLoop     = updater.StartBackground
 	runUpdateNow         = updater.CheckAndApply
+	emitRuntimeEvent     = wailsruntime.EventsEmit
 	runtimeQuit          = wailsruntime.Quit
 	exitProcess          = os.Exit
 	quitApplication      = func(ctx context.Context) {
@@ -51,6 +54,15 @@ func (a *App) Startup(ctx context.Context) {
 	a.quit = func() {
 		quitApplication(ctx)
 	}
+
+	observeUpdateStatus(func(status updater.Status) {
+		if ctx == nil {
+			return
+		}
+
+		emitRuntimeEvent(ctx, "updater:status", status)
+	})
+	startUpdaterLoop()
 }
 
 // NodeID returns the machine's deterministic node identifier.
