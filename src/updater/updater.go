@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -66,6 +67,7 @@ var (
 	changeMode        = os.Chmod
 	writeTextFile     = os.WriteFile
 	startOSProcess    = os.StartProcess
+	lookPath          = exec.LookPath
 	startAsync        = startAsyncDefault
 	runCheckAndApply  = CheckAndApply
 	runCheckStatus    = CheckStatus
@@ -802,13 +804,17 @@ func windowsUpdateScript(currentPath, replacementPath string) string {
 func relaunchBinary(path string) error {
 	if bundlePath, err := appBundleRoot(path); err == nil {
 		visibleBundle := visibleAppBundlePath(bundlePath)
+		openPath, err := lookPath("open")
+		if err != nil {
+			return err
+		}
 		attr := &os.ProcAttr{
 			Dir:   filepath.Dir(visibleBundle),
 			Env:   os.Environ(),
 			Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 		}
 
-		proc, err := startOSProcess("open", []string{"open", "-n", visibleBundle}, attr)
+		proc, err := startOSProcess(openPath, []string{"open", "-n", visibleBundle}, attr)
 		if err != nil {
 			return err
 		}

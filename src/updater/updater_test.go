@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1211,11 +1212,17 @@ func TestRelaunchBinaryUsesOpenForAppBundle(t *testing.T) {
 
 	appBinary := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
 	called := false
+	lookPath = func(file string) (string, error) {
+		if file != "open" {
+			t.Fatalf("lookPath() file = %q, want %q", file, "open")
+		}
+		return "/usr/bin/open", nil
+	}
 	startOSProcess = func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 		called = true
 
-		if name != "open" {
-			t.Fatalf(processMismatchFormat, name, "open")
+		if name != "/usr/bin/open" {
+			t.Fatalf(processMismatchFormat, name, "/usr/bin/open")
 		}
 		if len(argv) != 3 || argv[0] != "open" || argv[1] != "-n" || argv[2] != filepath.Join("/Applications", AppName+".app") {
 			t.Fatalf("argv = %q, want open -n %q", argv, filepath.Join("/Applications", AppName+".app"))
@@ -1233,6 +1240,20 @@ func TestRelaunchBinaryUsesOpenForAppBundle(t *testing.T) {
 
 	if !called {
 		t.Fatal("relaunchBinary() did not use open for app bundle relaunch")
+	}
+}
+
+func TestRelaunchBinaryOpenLookupError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	appBinary := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
+	lookPath = func(string) (string, error) {
+		return "", fmt.Errorf("lookup failed")
+	}
+
+	if err := relaunchBinary(appBinary); err == nil {
+		t.Fatal("relaunchBinary() error = nil, want lookup failure")
 	}
 }
 
@@ -2115,6 +2136,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalChangeMode := changeMode
 	originalWriteTextFile := writeTextFile
 	originalStartOSProcess := startOSProcess
+	originalLookPath := lookPath
 	originalStartAsync := startAsync
 	originalRunCheckAndApply := runCheckAndApply
 	originalRunCheckStatus := runCheckStatus
@@ -2144,6 +2166,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	changeMode = os.Chmod
 	writeTextFile = os.WriteFile
 	startOSProcess = os.StartProcess
+	lookPath = exec.LookPath
 	startAsync = startAsyncDefault
 	runCheckAndApply = CheckAndApply
 	runCheckStatus = CheckStatus
@@ -2173,6 +2196,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 		changeMode = originalChangeMode
 		writeTextFile = originalWriteTextFile
 		startOSProcess = originalStartOSProcess
+		lookPath = originalLookPath
 		startAsync = originalStartAsync
 		runCheckAndApply = originalRunCheckAndApply
 		runCheckStatus = originalRunCheckStatus
