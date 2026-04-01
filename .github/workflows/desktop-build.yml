@@ -126,7 +126,6 @@ jobs:
           changelog_path="release/${changelog_file}"
 
           {
-            printf "# Continuum %s\n\n" "${release_tag_name}"
             if [[ -n "${release_tag}" ]]; then
               printf "Changes since %s:\n\n" "${release_tag}"
               changelog_range="${release_tag}..${GITHUB_SHA}"
