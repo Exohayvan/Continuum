@@ -65,6 +65,23 @@ body {
     line-height: 1.7;
 }
 
+.update-error {
+    margin: 14px 0 0;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: rgba(255, 122, 89, 0.14);
+    border: 1px solid rgba(255, 122, 89, 0.32);
+    color: #ffd6c8;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.hidden {
+    display: none;
+}
+
 .update-actions {
     display: flex;
     flex-wrap: wrap;

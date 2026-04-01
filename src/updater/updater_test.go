@@ -59,9 +59,11 @@ const (
 	processMismatchFormat          = "process = %q, want %q"
 	checkStatusCurrentFormat       = "checkStatus().CurrentVersion = %q, want %q"
 	checkStatusRemoteFormat        = "checkStatus().RemoteVersion = %q, want %q"
+	checkStatusErrorFormat         = "checkStatus().UpdateError = %q, want %q"
 	stableReleaseTagV200           = "v2.0.0"
 	checkStatusUpdateRequiredFalse = "checkStatus().UpdateRequired = true, want false"
 	unavailableRemote              = "unavailable"
+	updateFailureText              = "update failed"
 )
 
 func TestBuildAssetName(t *testing.T) {
@@ -1205,6 +1207,10 @@ func TestCheckAndApplyWrapper(t *testing.T) {
 	if err := CheckAndApply(); err != nil {
 		t.Fatalf("CheckAndApply() error = %v", err)
 	}
+
+	if got := cachedUpdateError(); got != "" {
+		t.Fatalf("cachedUpdateError() = %q, want empty string", got)
+	}
 }
 
 func TestCheckStatusWrapper(t *testing.T) {
@@ -1221,7 +1227,7 @@ func TestCheckStatusWrapper(t *testing.T) {
 	currentVersion = func() string { return "1.5.0" }
 
 	got := CheckStatus()
-	assertCheckStatus(t, got, "1.5.0", stableReleaseTag, true)
+	assertCheckStatus(t, got, "1.5.0", stableReleaseTag, true, "")
 }
 
 func TestCheckStatusReportsUpdateRequirement(t *testing.T) {
@@ -1237,7 +1243,7 @@ func TestCheckStatusReportsUpdateRequirement(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "1.5.0")
-	assertCheckStatus(t, got, "1.5.0", stableReleaseTag, true)
+	assertCheckStatus(t, got, "1.5.0", stableReleaseTag, true, "")
 }
 
 func TestCheckStatusSkipsUpdateWhenVersionsMatch(t *testing.T) {
@@ -1253,7 +1259,7 @@ func TestCheckStatusSkipsUpdateWhenVersionsMatch(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "2.0.0")
-	assertCheckStatus(t, got, "2.0.0", stableReleaseTagV200, false)
+	assertCheckStatus(t, got, "2.0.0", stableReleaseTagV200, false, "")
 }
 
 func TestCheckStatusSkipsUpdateWhenCurrentIsNewer(t *testing.T) {
@@ -1269,7 +1275,7 @@ func TestCheckStatusSkipsUpdateWhenCurrentIsNewer(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "2.0.1")
-	assertCheckStatus(t, got, "2.0.1", stableReleaseTagV200, false)
+	assertCheckStatus(t, got, "2.0.1", stableReleaseTagV200, false, "")
 }
 
 func TestCheckStatusHandlesUnavailableRemote(t *testing.T) {
@@ -1279,7 +1285,7 @@ func TestCheckStatusHandlesUnavailableRemote(t *testing.T) {
 	apiBaseURL = ":"
 
 	got := checkStatus(context.Background(), "1.5.0")
-	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false)
+	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false, "")
 }
 
 func TestCheckStatusSkipsInvalidCurrentVersion(t *testing.T) {
@@ -1287,7 +1293,7 @@ func TestCheckStatusSkipsInvalidCurrentVersion(t *testing.T) {
 	defer restore()
 
 	got := checkStatus(context.Background(), "dev")
-	assertCheckStatus(t, got, "dev", unavailableRemote, false)
+	assertCheckStatus(t, got, "dev", unavailableRemote, false, "")
 }
 
 func TestCheckStatusHandlesLatestStableReleaseError(t *testing.T) {
@@ -1303,7 +1309,34 @@ func TestCheckStatusHandlesLatestStableReleaseError(t *testing.T) {
 	httpClient = server.Client()
 
 	got := checkStatus(context.Background(), "1.5.0")
-	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false)
+	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false, "")
+}
+
+func TestCheckStatusIncludesCachedUpdateError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	storeUpdateError(errors.New(updateFailureText))
+	apiBaseURL = ":"
+
+	got := checkStatus(context.Background(), "1.5.0")
+	assertCheckStatus(t, got, "1.5.0", unavailableRemote, false, updateFailureText)
+}
+
+func TestCheckAndApplyWrapperStoresUpdateError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	currentVersion = func() string { return "1.5.0" }
+	apiBaseURL = ":"
+
+	err := CheckAndApply()
+	if err == nil {
+		t.Fatal("CheckAndApply() error = nil, want fetch failure")
+	}
+	if got := cachedUpdateError(); got == "" {
+		t.Fatal("cachedUpdateError() = empty string, want stored failure")
+	}
 }
 
 func TestRemoteVersionFetchesAndCachesLatest(t *testing.T) {
@@ -1940,6 +1973,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	originalRelativePath := relativePath
 	originalCurrentVersion := currentVersion
 	originalLatestRemoteVersion := latestRemoteVersion
+	originalLatestUpdateError := latestUpdateError
 
 	apiBaseURL = "https://api.github.com"
 	httpClient = &http.Client{Timeout: time.Second}
@@ -1966,6 +2000,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	relativePath = filepath.Rel
 	startOnce = sync.Once{}
 	storeRemoteVersion("")
+	clearUpdateError()
 
 	return func() {
 		apiBaseURL = originalAPIBaseURL
@@ -1993,6 +2028,11 @@ func stubUpdaterHooks(t *testing.T) func() {
 		relativePath = originalRelativePath
 		startOnce = sync.Once{}
 		storeRemoteVersion(originalLatestRemoteVersion)
+		if originalLatestUpdateError == "" {
+			clearUpdateError()
+		} else {
+			storeUpdateError(errors.New(originalLatestUpdateError))
+		}
 	}
 }
 
@@ -2097,7 +2137,7 @@ func releaseServer(t *testing.T, assetName string, files map[string]string) *htt
 	return server
 }
 
-func assertCheckStatus(t *testing.T, got Status, wantCurrent string, wantRemote string, wantUpdateRequired bool) {
+func assertCheckStatus(t *testing.T, got Status, wantCurrent string, wantRemote string, wantUpdateRequired bool, wantUpdateError string) {
 	t.Helper()
 
 	if got.CurrentVersion != wantCurrent {
@@ -2105,6 +2145,9 @@ func assertCheckStatus(t *testing.T, got Status, wantCurrent string, wantRemote 
 	}
 	if got.RemoteVersion != wantRemote {
 		t.Fatalf(checkStatusRemoteFormat, got.RemoteVersion, wantRemote)
+	}
+	if got.UpdateError != wantUpdateError {
+		t.Fatalf(checkStatusErrorFormat, got.UpdateError, wantUpdateError)
 	}
 	if got.UpdateRequired == wantUpdateRequired {
 		return

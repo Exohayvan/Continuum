@@ -4,6 +4,7 @@ const refreshButton = document.getElementById("refresh");
 const statusElement = document.getElementById("status");
 const updateDialogElement = document.getElementById("update-dialog");
 const updateMessageElement = document.getElementById("update-message");
+const updateErrorElement = document.getElementById("update-error");
 const updateNowButton = document.getElementById("update-now");
 const exitAppButton = document.getElementById("exit-app");
 const appBridge = globalThis.go.desktop.App;
@@ -68,10 +69,12 @@ function syncUpdateModal(updateStatus) {
 
     const currentVersion = formatVersion(updateStatus.currentVersion);
     const remoteVersion = formatVersion(updateStatus.remoteVersion);
+    const updateError = updateStatus.updateError ?? "";
     const statusChanged =
         pendingUpdateStatus === null ||
         pendingUpdateStatus.currentVersion !== updateStatus.currentVersion ||
-        pendingUpdateStatus.remoteVersion !== updateStatus.remoteVersion;
+        pendingUpdateStatus.remoteVersion !== updateStatus.remoteVersion ||
+        pendingUpdateStatus.updateError !== updateStatus.updateError;
 
     pendingUpdateStatus = updateStatus;
     if (statusChanged || updateCountdownTimer === null) {
@@ -81,12 +84,28 @@ function syncUpdateModal(updateStatus) {
     showUpdateModal();
     updateNowButton.disabled = false;
     exitAppButton.disabled = false;
-    renderUpdateMessage(currentVersion, remoteVersion);
+    renderUpdateMessage(currentVersion, remoteVersion, updateError);
+
+    if (updateError) {
+        clearUpdateCountdown();
+        statusElement.textContent = "Update failed";
+        return;
+    }
+
     startUpdateCountdown();
 }
 
-function renderUpdateMessage(currentVersion, remoteVersion) {
+function renderUpdateMessage(currentVersion, remoteVersion, updateError = "") {
+    if (updateError) {
+        updateMessageElement.textContent = `Current ${currentVersion}. Remote ${remoteVersion}. Automatic retry is paused until you choose Update Now or Exit.`;
+        updateErrorElement.textContent = `Last update attempt failed:\n${updateError}`;
+        updateErrorElement.classList.remove("hidden");
+        return;
+    }
+
     updateMessageElement.textContent = `Current ${currentVersion}. Remote ${remoteVersion}. Continuum will auto update in ${countdownRemaining} seconds.`;
+    updateErrorElement.textContent = "";
+    updateErrorElement.classList.add("hidden");
 }
 
 function startUpdateCountdown() {
@@ -106,6 +125,7 @@ function startUpdateCountdown() {
         renderUpdateMessage(
             formatVersion(pendingUpdateStatus?.currentVersion),
             formatVersion(pendingUpdateStatus?.remoteVersion),
+            pendingUpdateStatus?.updateError,
         );
     }, 1000);
 }
@@ -135,6 +155,8 @@ function showUpdateModal() {
 function hideUpdateModal() {
     clearUpdateCountdown();
     pendingUpdateStatus = null;
+    updateErrorElement.textContent = "";
+    updateErrorElement.classList.add("hidden");
 
     if (!updateDialogElement.open) {
         updateDialogElement.removeAttribute("open");
@@ -154,6 +176,8 @@ async function triggerUpdateNow() {
     updateNowButton.disabled = true;
     exitAppButton.disabled = true;
     updateMessageElement.textContent = "Applying update now...";
+    updateErrorElement.textContent = "";
+    updateErrorElement.classList.add("hidden");
     statusElement.textContent = "Applying update...";
 
     try {
@@ -167,10 +191,26 @@ async function triggerUpdateNow() {
 
         statusElement.textContent = "Update still required";
     } catch (error) {
-        updateMessageElement.textContent = "Update failed. You can try again or exit.";
-        updateNowButton.disabled = false;
-        exitAppButton.disabled = false;
-        statusElement.textContent = "Update failed";
+        try {
+            const updateStatus = await appBridge.UpdateStatus();
+            pendingUpdateStatus = updateStatus;
+            updateNowButton.disabled = false;
+            exitAppButton.disabled = false;
+            renderUpdateMessage(
+                formatVersion(updateStatus.currentVersion),
+                formatVersion(updateStatus.remoteVersion),
+                updateStatus.updateError || String(error),
+            );
+            statusElement.textContent = "Update failed";
+        } catch (statusError) {
+            updateMessageElement.textContent = "Update failed. You can try again or exit.";
+            updateErrorElement.textContent = String(error);
+            updateErrorElement.classList.remove("hidden");
+            updateNowButton.disabled = false;
+            exitAppButton.disabled = false;
+            statusElement.textContent = "Update failed";
+            console.error(statusError);
+        }
         console.error(error);
     }
 }

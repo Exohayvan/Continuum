@@ -12,6 +12,7 @@ const (
 	testNodeID        = "node-123"
 	testVersion       = "1.5.0"
 	testRemoteVersion = "v1.6.0"
+	testUpdateError   = "download failed"
 )
 
 func TestNewAppReturnsEmptyBackend(t *testing.T) {
@@ -141,6 +142,7 @@ func TestUpdateStatusReturnsResolvedValue(t *testing.T) {
 			CurrentVersion: testVersion,
 			RemoteVersion:  testRemoteVersion,
 			UpdateRequired: true,
+			UpdateError:    testUpdateError,
 		}
 	}
 	t.Cleanup(func() {
@@ -149,7 +151,7 @@ func TestUpdateStatusReturnsResolvedValue(t *testing.T) {
 
 	app := NewApp()
 	got := app.UpdateStatus()
-	if got.CurrentVersion != testVersion || got.RemoteVersion != testRemoteVersion || !got.UpdateRequired {
+	if got.CurrentVersion != testVersion || got.RemoteVersion != testRemoteVersion || !got.UpdateRequired || got.UpdateError != testUpdateError {
 		t.Fatalf("UpdateStatus() = %#v, want update-required status", got)
 	}
 }

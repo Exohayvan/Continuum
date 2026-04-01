@@ -44,6 +44,7 @@ type Status struct {
 	CurrentVersion string `json:"currentVersion"`
 	RemoteVersion  string `json:"remoteVersion"`
 	UpdateRequired bool   `json:"updateRequired"`
+	UpdateError    string `json:"updateError"`
 }
 
 var (
@@ -79,6 +80,8 @@ var (
 	startOnce           sync.Once
 	remoteVersionMu     sync.RWMutex
 	latestRemoteVersion string
+	updateErrorMu       sync.RWMutex
+	latestUpdateError   string
 )
 
 type loopTicker interface {
@@ -111,7 +114,14 @@ func StartBackground() {
 }
 
 func CheckAndApply() error {
-	return checkAndApply(context.Background(), currentVersion(), runtime.GOOS, runtime.GOARCH)
+	err := checkAndApply(context.Background(), currentVersion(), runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		storeUpdateError(err)
+		return err
+	}
+
+	clearUpdateError()
+	return nil
 }
 
 func CheckStatus() Status {
@@ -150,6 +160,7 @@ func checkStatus(ctx context.Context, current string) Status {
 	status := Status{
 		CurrentVersion: current,
 		RemoteVersion:  "unavailable",
+		UpdateError:    cachedUpdateError(),
 	}
 
 	currentValue, err := version.ParseString(current)
@@ -354,6 +365,28 @@ func storeRemoteVersion(tag string) {
 	}
 
 	latestRemoteVersion = "v" + tag
+}
+
+func cachedUpdateError() string {
+	updateErrorMu.RLock()
+	defer updateErrorMu.RUnlock()
+	return latestUpdateError
+}
+
+func clearUpdateError() {
+	updateErrorMu.Lock()
+	defer updateErrorMu.Unlock()
+	latestUpdateError = ""
+}
+
+func storeUpdateError(err error) {
+	updateErrorMu.Lock()
+	defer updateErrorMu.Unlock()
+	if err == nil {
+		latestUpdateError = ""
+		return
+	}
+	latestUpdateError = err.Error()
 }
 
 func buildAssetName(tag, goos, goarch string) string {
