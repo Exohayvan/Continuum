@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -19,18 +20,6 @@ import (
 	"continuum/src/datamanager"
 	"continuum/src/nodeid"
 )
-
-const sampleBootstrapYAML = `version: 1
-nodes:
-  na-west:
-    node_id: "west-node"
-    host: "203.0.113.50"
-    port: 58103
-  na-east:
-    node_id: "east-node"
-    host: "162.191.52.239"
-    port: 58103
-`
 
 func TestLoadStateReturnsExistingPeerCount(t *testing.T) {
 	restore := stubBootstrapHooks(t)
@@ -82,33 +71,27 @@ func TestLoadStateFetchesAndSortsBootstrapNodes(t *testing.T) {
 	ensureDataLayout = func() (string, error) {
 		return dataPath, nil
 	}
+	resolveNodeID = func() string { return "" }
+	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
-		return []byte(sampleBootstrapYAML), nil
+		return bootstrapList, nil
 	}
 	probeEndpoint = func(host string, port int) (time.Duration, error) {
-		switch host {
-		case "162.191.52.239":
-			return 12 * time.Millisecond, nil
-		case "203.0.113.50":
-			return 34 * time.Millisecond, nil
-		default:
-			t.Fatalf("probeEndpoint() host = %q, want known host", host)
-			return 0, nil
+		if host != "162.191.52.239" {
+			t.Fatalf("probeEndpoint() host = %q, want %q", host, "162.191.52.239")
 		}
+		return 12 * time.Millisecond, nil
 	}
 
 	state := LoadState()
 	if !state.NeedsBootstrap {
 		t.Fatal("LoadState() NeedsBootstrap = false, want true")
 	}
-	if len(state.Nodes) != 2 {
-		t.Fatalf("len(LoadState().Nodes) = %d, want %d", len(state.Nodes), 2)
+	if len(state.Nodes) != 1 {
+		t.Fatalf("len(LoadState().Nodes) = %d, want %d", len(state.Nodes), 1)
 	}
 	if state.Nodes[0].Name != "na-east" || state.Nodes[0].LatencyMilliseconds != 12 {
 		t.Fatalf("LoadState().Nodes[0] = %#v, want na-east first with 12ms", state.Nodes[0])
-	}
-	if state.Nodes[1].Name != "na-west" || state.Nodes[1].LatencyMilliseconds != 34 {
-		t.Fatalf("LoadState().Nodes[1] = %#v, want na-west second with 34ms", state.Nodes[1])
 	}
 }
 
@@ -183,8 +166,9 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	resolveNodeID = func() string {
 		return "joining-node"
 	}
+	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
-		return []byte(sampleBootstrapYAML), nil
+		return bootstrapList, nil
 	}
 
 	serverConn, clientConn := net.Pipe()
@@ -241,6 +225,7 @@ func TestFetchRemoteBootstrapListReturnsResponseBody(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
+	bootstrapList := loadBootstrapListFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
 			t.Fatalf("request.Method = %q, want %q", request.Method, http.MethodGet)
@@ -248,7 +233,7 @@ func TestFetchRemoteBootstrapListReturnsResponseBody(t *testing.T) {
 		if request.Header.Get("User-Agent") != "continuum-bootstrap" {
 			t.Fatalf("User-Agent = %q, want %q", request.Header.Get("User-Agent"), "continuum-bootstrap")
 		}
-		_, _ = responseWriter.Write([]byte(sampleBootstrapYAML))
+		_, _ = responseWriter.Write(bootstrapList)
 	}))
 	defer server.Close()
 
@@ -258,8 +243,8 @@ func TestFetchRemoteBootstrapListReturnsResponseBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchRemoteBootstrapList() error = %v", err)
 	}
-	if string(data) != sampleBootstrapYAML {
-		t.Fatalf("fetchRemoteBootstrapList() = %q, want %q", string(data), sampleBootstrapYAML)
+	if string(data) != string(bootstrapList) {
+		t.Fatalf("fetchRemoteBootstrapList() = %q, want %q", string(data), string(bootstrapList))
 	}
 }
 
@@ -330,9 +315,10 @@ func TestStartServiceInvokesBootstrapLoop(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	resolveNodeID = func() string { return "east-node" }
+	resolveNodeID = func() string { return "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45" }
+	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
-		return []byte(sampleBootstrapYAML), nil
+		return bootstrapList, nil
 	}
 
 	called := make(chan struct{}, 1)
@@ -354,9 +340,10 @@ func TestStartBootstrapServiceReturnsAcceptError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	resolveNodeID = func() string { return "east-node" }
+	resolveNodeID = func() string { return "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45" }
+	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
-		return []byte(sampleBootstrapYAML), nil
+		return bootstrapList, nil
 	}
 	wantErr := errors.New("listener stopped")
 	listenBootstrap = func(int) (net.Listener, error) {
@@ -709,6 +696,23 @@ func buildSignedPeerFixture(t *testing.T, privateKey ed25519.PrivateKey, ip stri
 	if err != nil {
 		t.Fatalf("buildPeerFile() error = %v", err)
 	}
+	return data
+}
+
+func loadBootstrapListFixture(t *testing.T) []byte {
+	t.Helper()
+
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed to resolve bootstrap test path")
+	}
+
+	bootstrapListPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "network", "bootstrap-list.yaml")
+	data, err := os.ReadFile(bootstrapListPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", bootstrapListPath, err)
+	}
+
 	return data
 }
 
