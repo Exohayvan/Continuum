@@ -402,7 +402,7 @@ func TestSetFile(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
-	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o600); err != nil {
 		t.Fatalf(writeFileFormat, err)
 	}
 
@@ -420,7 +420,7 @@ func TestSetFileNoChange(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
-	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o600); err != nil {
 		t.Fatalf(writeFileFormat, err)
 	}
 
@@ -447,7 +447,7 @@ func TestSetFileParseError(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
-	if err := os.WriteFile(path, []byte("major: x\nminor: 1\npatch: 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("major: x\nminor: 1\npatch: 0\n"), 0o600); err != nil {
 		t.Fatalf(writeFileFormat, err)
 	}
 
@@ -461,11 +461,11 @@ func TestSetFileWriteError(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), versionFileName)
-	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(sampleVersionYAML), 0o600); err != nil {
 		t.Fatalf(writeFileFormat, err)
 	}
 
-	if err := os.Chmod(path, 0o444); err != nil {
+	if err := os.Chmod(path, 0o400); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
 	}
 
