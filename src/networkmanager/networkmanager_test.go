@@ -82,6 +82,48 @@ func TestWrapReadWriteCloserPreservesClose(t *testing.T) {
 	}
 }
 
+func TestWrapReadWriteCloserTracksReadAndWrite(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	now := time.Unix(1_700_000_003, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	target := &stubReadWriteCloser{
+		readData: []byte("seed"),
+	}
+	wrapped := WrapReadWriteCloser(target)
+	if wrapped == nil {
+		t.Fatal("WrapReadWriteCloser() = nil, want wrapper")
+	}
+
+	buffer := make([]byte, len(target.readData))
+	readCount, err := wrapped.Read(buffer)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if readCount != len(target.readData) {
+		t.Fatalf("Read() = %d, want %d", readCount, len(target.readData))
+	}
+
+	writeCount, err := wrapped.Write([]byte("uplink"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if writeCount != len("uplink") {
+		t.Fatalf("Write() = %d, want %d", writeCount, len("uplink"))
+	}
+
+	usage := Snapshot()
+	if usage.TotalReadBytes != uint64(len("seed")) {
+		t.Fatalf("Snapshot().TotalReadBytes = %d, want %d", usage.TotalReadBytes, len("seed"))
+	}
+	if usage.TotalWriteBytes != uint64(len("uplink")) {
+		t.Fatalf("Snapshot().TotalWriteBytes = %d, want %d", usage.TotalWriteBytes, len("uplink"))
+	}
+}
+
 func TestWrapConnTracksTraffic(t *testing.T) {
 	resetNetworkManagerTestState(t)
 
@@ -201,11 +243,17 @@ func (s *stubReadWriter) Write(buffer []byte) (int, error) {
 }
 
 type stubReadWriteCloser struct {
-	closed bool
+	readData []byte
+	closed   bool
 }
 
-func (s *stubReadWriteCloser) Read([]byte) (int, error) {
-	return 0, io.EOF
+func (s *stubReadWriteCloser) Read(buffer []byte) (int, error) {
+	if len(s.readData) == 0 {
+		return 0, io.EOF
+	}
+
+	copy(buffer, s.readData)
+	return len(s.readData), nil
 }
 
 func (s *stubReadWriteCloser) Write(buffer []byte) (int, error) {

@@ -5,8 +5,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -233,6 +235,214 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	}
 
 	removePendingSession(result.SessionID)
+}
+
+func TestFetchRemoteBootstrapListReturnsResponseBody(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			t.Fatalf("request.Method = %q, want %q", request.Method, http.MethodGet)
+		}
+		if request.Header.Get("User-Agent") != "continuum-bootstrap" {
+			t.Fatalf("User-Agent = %q, want %q", request.Header.Get("User-Agent"), "continuum-bootstrap")
+		}
+		_, _ = responseWriter.Write([]byte(sampleBootstrapYAML))
+	}))
+	defer server.Close()
+
+	httpClient = server.Client()
+
+	data, err := fetchRemoteBootstrapList(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("fetchRemoteBootstrapList() error = %v", err)
+	}
+	if string(data) != sampleBootstrapYAML {
+		t.Fatalf("fetchRemoteBootstrapList() = %q, want %q", string(data), sampleBootstrapYAML)
+	}
+}
+
+func TestMeasureEndpointLatency(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan struct{})
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			close(accepted)
+			_ = conn.Close()
+		}
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	latency, err := measureEndpointLatency("127.0.0.1", port)
+	if err != nil {
+		t.Fatalf("measureEndpointLatency() error = %v", err)
+	}
+	if latency <= 0 {
+		t.Fatalf("measureEndpointLatency() = %s, want > 0", latency)
+	}
+	<-accepted
+}
+
+func TestDialAndListenBootstrapEndpoints(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	listener, err := listenBootstrapEndpoint(0)
+	if err != nil {
+		t.Fatalf("listenBootstrapEndpoint() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		_ = conn.Close()
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	conn, err := dialBootstrapEndpoint(context.Background(), "127.0.0.1", port)
+	if err != nil {
+		t.Fatalf("dialBootstrapEndpoint() error = %v", err)
+	}
+	_ = conn.Close()
+
+	if err := <-done; err != nil {
+		t.Fatalf("listener.Accept() error = %v", err)
+	}
+}
+
+func TestStartServiceInvokesBootstrapLoop(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return "east-node" }
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return []byte(sampleBootstrapYAML), nil
+	}
+
+	called := make(chan struct{}, 1)
+	listenBootstrap = func(int) (net.Listener, error) {
+		called <- struct{}{}
+		return &failingListener{acceptErr: errors.New("stop")}, nil
+	}
+
+	StartService()
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("StartService() did not attempt to start the bootstrap listener")
+	}
+}
+
+func TestStartBootstrapServiceReturnsAcceptError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return "east-node" }
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return []byte(sampleBootstrapYAML), nil
+	}
+	wantErr := errors.New("listener stopped")
+	listenBootstrap = func(int) (net.Listener, error) {
+		return &failingListener{acceptErr: wantErr}, nil
+	}
+
+	err := startBootstrapService(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("startBootstrapService() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	baseTime := time.Now().Add(time.Minute)
+	currentTime = func() time.Time {
+		return baseTime
+	}
+	readManagedFile = func(string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+	probeEndpoint = func(string, int) (time.Duration, error) {
+		return 5 * time.Millisecond, nil
+	}
+
+	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures("2026-04-02T00:00:00Z")
+	if err != nil {
+		t.Fatalf("buildAccountFixtures() error = %v", err)
+	}
+
+	writtenFiles := map[string][]byte{}
+	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
+		writtenFiles[path] = append([]byte(nil), data...)
+		return nil
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	go handleBootstrapConnection(connWithRemoteAddr{
+		Conn:       serverConn,
+		remoteAddr: &net.TCPAddr{IP: net.ParseIP("162.191.52.239"), Port: 43001},
+	})
+
+	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionStartRequest{
+		Type:       "start",
+		NodeID:     "joining-node",
+		ListenPort: 58103,
+	}); err != nil {
+		t.Fatalf("Encode(start request) error = %v", err)
+	}
+
+	var startResponse bootstrapSessionStartResponse
+	if err := json.NewDecoder(clientConn).Decode(&startResponse); err != nil {
+		t.Fatalf("Decode(start response) error = %v", err)
+	}
+	if startResponse.Error != "" {
+		t.Fatalf("startResponse.Error = %q, want empty", startResponse.Error)
+	}
+
+	peerData := buildSignedPeerFixture(t, privateKey, startResponse.ObservedIPv4, startResponse.Port, accountID)
+	metaData := buildSignedMetaFixture(t, privateKey, "joining-node", accountID, startResponse.FirstSeen, startResponse.Revision)
+	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionFinalizeRequest{
+		Type:          "finalize",
+		NodeID:        "joining-node",
+		AccountID:     accountID,
+		PeerData:      peerData,
+		MetaData:      metaData,
+		AccountBlob:   blobData,
+		AccountPubKey: accountPubKeyData,
+		AccountMeta:   accountMetaData,
+	}); err != nil {
+		t.Fatalf("Encode(finalize request) error = %v", err)
+	}
+
+	var finalizeResponse bootstrapSessionFinalizeResponse
+	if err := json.NewDecoder(clientConn).Decode(&finalizeResponse); err != nil {
+		t.Fatalf("Decode(finalize response) error = %v", err)
+	}
+	if finalizeResponse.Error != "" {
+		t.Fatalf("finalizeResponse.Error = %q, want empty", finalizeResponse.Error)
+	}
+	if _, ok := writtenFiles[filepath.Join("network", "accounts", accountID+pubkeyFileSuffix)]; !ok {
+		t.Fatal("handleBootstrapConnection() did not write the account pubkey")
+	}
 }
 
 func TestCompleteCreatesFilesAndFinalizesSession(t *testing.T) {
@@ -558,4 +768,29 @@ func stubBootstrapHooks(t *testing.T) func() {
 		serverStartOnce = originalServerStartOnce
 		pendingSessions = originalPendingSessions
 	}
+}
+
+type failingListener struct {
+	acceptErr error
+}
+
+func (l *failingListener) Accept() (net.Conn, error) {
+	return nil, l.acceptErr
+}
+
+func (l *failingListener) Close() error {
+	return nil
+}
+
+func (l *failingListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4zero, Port: 58103}
+}
+
+type connWithRemoteAddr struct {
+	net.Conn
+	remoteAddr net.Addr
+}
+
+func (c connWithRemoteAddr) RemoteAddr() net.Addr {
+	return c.remoteAddr
 }

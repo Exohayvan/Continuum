@@ -141,6 +141,126 @@ func TestGetOrCreateKeysReturnsWriteError(t *testing.T) {
 	}
 }
 
+func TestGenerateCreatesAccountMaterial(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	storedFiles := map[string][]byte{}
+	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
+		if perm != privateKeyPerm {
+			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+		}
+		storedFiles[path] = append([]byte(nil), data...)
+		return nil
+	}
+
+	material, err := Generate("secret-pass")
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if material.AccountID != AccountIDFromPublicKey(material.PublicKey) {
+		t.Fatalf("Generate().AccountID = %q, want derived public key hash", material.AccountID)
+	}
+	if material.LocalKeyPath != filepath.Join(localAccountDir, material.AccountID+keyFileSuffix) {
+		t.Fatalf("Generate().LocalKeyPath = %q, want %q", material.LocalKeyPath, filepath.Join(localAccountDir, material.AccountID+keyFileSuffix))
+	}
+	if _, ok := storedFiles[material.LocalKeyPath]; !ok {
+		t.Fatal("Generate() did not persist the local private key")
+	}
+
+	blob, blobPublicKey, err := ValidateBlob(material.BlobData)
+	if err != nil {
+		t.Fatalf("ValidateBlob() error = %v", err)
+	}
+	if blob.AccountID != material.AccountID {
+		t.Fatalf("ValidateBlob().AccountID = %q, want %q", blob.AccountID, material.AccountID)
+	}
+	if string(blobPublicKey) != string(material.PublicKey) {
+		t.Fatal("ValidateBlob() returned a different public key")
+	}
+}
+
+func TestRecoverRestoresAccountMaterial(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+	blobData, err := BuildBlob(accountID, publicKey, privateKey, "secret-pass")
+	if err != nil {
+		t.Fatalf("BuildBlob() error = %v", err)
+	}
+
+	storedFiles := map[string][]byte{}
+	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
+		if perm != privateKeyPerm {
+			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+		}
+		storedFiles[path] = append([]byte(nil), data...)
+		return nil
+	}
+
+	material, err := Recover(blobData, "secret-pass")
+	if err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if material.AccountID != accountID {
+		t.Fatalf("Recover().AccountID = %q, want %q", material.AccountID, accountID)
+	}
+	if string(material.PublicKey) != string(publicKey) {
+		t.Fatal("Recover() returned a different public key")
+	}
+	if string(material.PrivateKey) != string(privateKey) {
+		t.Fatal("Recover() returned a different private key")
+	}
+	if _, ok := storedFiles[material.LocalKeyPath]; !ok {
+		t.Fatal("Recover() did not persist the recovered private key")
+	}
+}
+
+func TestSaveLocalKeyUsesDerivedPath(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	calledPath := ""
+	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
+		calledPath = path
+		if perm != privateKeyPerm {
+			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+		}
+		if string(data) == "" {
+			t.Fatal("writeKeyFile() data = empty, want encoded private key")
+		}
+		return nil
+	}
+
+	gotPath, err := SaveLocalKey(" account-123 ", privateKey)
+	if err != nil {
+		t.Fatalf("SaveLocalKey() error = %v", err)
+	}
+	wantPath := filepath.Join(localAccountDir, "account-123"+keyFileSuffix)
+	if gotPath != wantPath {
+		t.Fatalf("SaveLocalKey() path = %q, want %q", gotPath, wantPath)
+	}
+	if calledPath != wantPath {
+		t.Fatalf("writeKeyFile() path = %q, want %q", calledPath, wantPath)
+	}
+	if LocalKeyPath(" account-123 ") != wantPath {
+		t.Fatalf("LocalKeyPath() = %q, want %q", LocalKeyPath(" account-123 "), wantPath)
+	}
+	if PubkeyFilePerm() != pubkeyFilePerm {
+		t.Fatalf("PubkeyFilePerm() = %#o, want %#o", PubkeyFilePerm(), pubkeyFilePerm)
+	}
+}
+
 func TestBuildAndVerifyAccountTrustFiles(t *testing.T) {
 	restore := stubAccountHooks(t)
 	defer restore()
