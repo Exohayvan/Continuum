@@ -1,5 +1,17 @@
 const versionElement = document.getElementById("version");
 const statusElement = document.getElementById("status");
+const bootstrapScreenElement = document.getElementById("bootstrap-screen");
+const bootstrapMetaElement = document.getElementById("bootstrap-meta");
+const bootstrapNodeListElement = document.getElementById("bootstrap-node-list");
+const bootstrapErrorElement = document.getElementById("bootstrap-error");
+const bootstrapRefreshButton = document.getElementById("bootstrap-refresh");
+const bootstrapSelectionElement = document.getElementById("bootstrap-selection");
+const bootstrapCustomHostElement = document.getElementById("bootstrap-custom-host");
+const bootstrapCustomPortElement = document.getElementById("bootstrap-custom-port");
+const bootstrapCustomConnectButton = document.getElementById("bootstrap-custom-connect");
+const bootstrapPasswordMetaElement = document.getElementById("bootstrap-password-meta");
+const bootstrapPasswordElement = document.getElementById("bootstrap-password");
+const bootstrapPasswordSubmitButton = document.getElementById("bootstrap-password-submit");
 const updateDialogElement = document.getElementById("update-dialog");
 const updateMessageElement = document.getElementById("update-message");
 const updateErrorElement = document.getElementById("update-error");
@@ -11,6 +23,7 @@ const fieldElements = new Map(
 const appBridge = globalThis.go.desktop.App;
 const runtimeBridge = globalThis.runtime;
 const updateCountdownSeconds = 15;
+const bootstrapRefreshIntervalMs = 5000;
 const diskUsageRefreshIntervalMs = 2000;
 const defaultPlaceholder = "Pending";
 const dashboardEventBindings = [
@@ -20,10 +33,17 @@ const dashboardEventBindings = [
 ];
 
 let updateCountdownTimer = null;
+let bootstrapRefreshTimer = null;
 let diskUsageTimer = null;
 let countdownRemaining = updateCountdownSeconds;
 let pendingUpdateStatus = null;
 let dashboardEventUnsubscribers = [];
+let bootstrapRequired = false;
+let selectedBootstrapKey = "";
+let connectingBootstrap = false;
+let awaitingBootstrapPassword = false;
+let pendingBootstrapSessionID = "";
+let pendingBootstrapRecovery = false;
 
 function formatVersion(value) {
     if (!value) {
@@ -101,6 +121,301 @@ function formatBandwidthUsage(snapshot) {
     return `Up ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s • Down ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s`;
 }
 
+function formatBootstrapLatency(node) {
+    if (!node || typeof node !== "object") {
+        return "Unknown";
+    }
+
+    if (!node.reachable) {
+        return node.error || "Unreachable";
+    }
+
+    return `${Number(node.latencyMilliseconds || 0)} ms`;
+}
+
+function showBootstrapScreen() {
+    bootstrapRequired = true;
+    bootstrapScreenElement.classList.remove("hidden");
+}
+
+function hideBootstrapScreen() {
+    bootstrapRequired = false;
+    bootstrapScreenElement.classList.add("hidden");
+    bootstrapErrorElement.textContent = "";
+    bootstrapErrorElement.classList.add("hidden");
+    selectedBootstrapKey = "";
+    pendingBootstrapSessionID = "";
+    pendingBootstrapRecovery = false;
+    awaitingBootstrapPassword = false;
+    if (bootstrapPasswordElement) {
+        bootstrapPasswordElement.value = "";
+        bootstrapPasswordElement.disabled = false;
+    }
+    if (bootstrapPasswordSubmitButton) {
+        bootstrapPasswordSubmitButton.disabled = false;
+        bootstrapPasswordSubmitButton.textContent = "Continue Bootstrap";
+    }
+    if (bootstrapPasswordMetaElement) {
+        bootstrapPasswordMetaElement.textContent = "Choose a bootstrap node first.";
+    }
+    bootstrapSelectionElement.textContent = "No bootstrap node selected yet.";
+    bootstrapSelectionElement.classList.add("is-placeholder");
+}
+
+function bootstrapNodeKey(node) {
+    if (!node || typeof node !== "object") {
+        return "";
+    }
+
+    return `${node.nodeId || ""}|${node.endpoint || ""}`;
+}
+
+function selectBootstrapNode(node) {
+    selectedBootstrapKey = bootstrapNodeKey(node);
+
+    if (bootstrapCustomHostElement) {
+        bootstrapCustomHostElement.value = node.host || "";
+    }
+    if (bootstrapCustomPortElement) {
+        bootstrapCustomPortElement.value = node.port ? String(node.port) : "";
+    }
+
+    bootstrapSelectionElement.textContent = `Selected ${node.name || "bootstrap node"} at ${node.endpoint || `${node.host}:${node.port}`}.`;
+    bootstrapSelectionElement.classList.remove("is-placeholder");
+    statusElement.textContent = "Bootstrap node selected";
+}
+
+function setBootstrapError(message) {
+    if (!message) {
+        bootstrapErrorElement.textContent = "";
+        bootstrapErrorElement.classList.add("hidden");
+        return;
+    }
+
+    bootstrapErrorElement.textContent = message;
+    bootstrapErrorElement.classList.remove("hidden");
+}
+
+function applyBootstrapConnectPrompt(result, label) {
+    pendingBootstrapSessionID = result.sessionId || "";
+    pendingBootstrapRecovery = Boolean(result.recoveryAvailable);
+    awaitingBootstrapPassword = Boolean(result.awaitingPassword);
+
+    if (bootstrapPasswordMetaElement) {
+        bootstrapPasswordMetaElement.textContent = pendingBootstrapRecovery
+            ? `Recovered account ${result.accountId || "unknown"} is available from ${label}. Enter its password to unlock the local signing key.`
+            : `No account exists for this NodeID on ${label}. Enter a password to create and encrypt a new account blob.`;
+    }
+    if (bootstrapPasswordElement) {
+        bootstrapPasswordElement.value = "";
+        bootstrapPasswordElement.disabled = false;
+        bootstrapPasswordElement.focus();
+    }
+    if (bootstrapPasswordSubmitButton) {
+        bootstrapPasswordSubmitButton.disabled = false;
+        bootstrapPasswordSubmitButton.textContent = pendingBootstrapRecovery ? "Recover Account" : "Create Account";
+    }
+
+    bootstrapSelectionElement.textContent = result.message || `Password required to continue with ${label}.`;
+    bootstrapSelectionElement.classList.remove("is-placeholder");
+    bootstrapMetaElement.textContent = `Held bootstrap session open with ${label}.`;
+    statusElement.textContent = pendingBootstrapRecovery ? "Account recovery available" : "Bootstrap password required";
+}
+
+async function connectBootstrapEndpoint(host, port, nodeID, label) {
+    if (connectingBootstrap) {
+        return;
+    }
+
+    connectingBootstrap = true;
+    setBootstrapError("");
+    statusElement.textContent = `Connecting to ${label}...`;
+    bootstrapMetaElement.textContent = `Attempting bootstrap handshake with ${label}...`;
+    bootstrapRefreshButton.disabled = true;
+    if (bootstrapCustomConnectButton) {
+        bootstrapCustomConnectButton.disabled = true;
+    }
+
+    try {
+        const result = await appBridge.ConnectBootstrap(host, port, nodeID || "");
+        applyBootstrapConnectPrompt(result, label);
+    } catch (error) {
+        setBootstrapError(String(error));
+        statusElement.textContent = "Bootstrap connection failed";
+        bootstrapMetaElement.textContent = `Unable to connect to ${label}.`;
+        console.error(error);
+    } finally {
+        connectingBootstrap = false;
+        bootstrapRefreshButton.disabled = false;
+        if (bootstrapCustomConnectButton) {
+            bootstrapCustomConnectButton.disabled = false;
+        }
+    }
+}
+
+async function completeBootstrapSession() {
+    if (!pendingBootstrapSessionID) {
+        setBootstrapError("Start a bootstrap session before entering a password.");
+        return;
+    }
+
+    const password = bootstrapPasswordElement?.value ?? "";
+    if (password.trim() === "") {
+        setBootstrapError("A bootstrap password is required.");
+        return;
+    }
+    if (connectingBootstrap) {
+        return;
+    }
+
+    connectingBootstrap = true;
+    setBootstrapError("");
+    statusElement.textContent = pendingBootstrapRecovery ? "Recovering account..." : "Creating account...";
+    bootstrapMetaElement.textContent = pendingBootstrapRecovery
+        ? "Decrypting recovered account blob and finalizing bootstrap..."
+        : "Generating account material and finalizing bootstrap...";
+    bootstrapRefreshButton.disabled = true;
+    bootstrapCustomConnectButton.disabled = true;
+    bootstrapPasswordSubmitButton.disabled = true;
+    bootstrapPasswordElement.disabled = true;
+
+    try {
+        const result = await appBridge.CompleteBootstrap(pendingBootstrapSessionID, password);
+        pendingBootstrapSessionID = "";
+        pendingBootstrapRecovery = false;
+        awaitingBootstrapPassword = false;
+        bootstrapPasswordElement.value = "";
+        bootstrapPasswordMetaElement.textContent = "Choose a bootstrap node first.";
+        bootstrapPasswordSubmitButton.textContent = "Continue Bootstrap";
+        bootstrapSelectionElement.textContent = result.message || "Bootstrap completed.";
+        bootstrapSelectionElement.classList.remove("is-placeholder");
+        statusElement.textContent = result.reachable ? "Bootstrap completed" : "Bootstrap completed (degraded)";
+        await loadShellState();
+    } catch (error) {
+        setBootstrapError(String(error));
+        statusElement.textContent = "Bootstrap completion failed";
+        bootstrapMetaElement.textContent = pendingBootstrapRecovery
+            ? "Unable to recover the account. Check the password and try again."
+            : "Unable to create the account. Check the password and try again.";
+        console.error(error);
+    } finally {
+        connectingBootstrap = false;
+        bootstrapRefreshButton.disabled = false;
+        bootstrapCustomConnectButton.disabled = false;
+        bootstrapPasswordSubmitButton.disabled = false;
+        bootstrapPasswordElement.disabled = false;
+    }
+}
+
+function renderBootstrapNodes(nodes) {
+    bootstrapNodeListElement.replaceChildren();
+
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+        const emptyElement = document.createElement("p");
+        emptyElement.className = "bootstrap-empty";
+        emptyElement.textContent = "No bootstrap nodes are available right now.";
+        bootstrapNodeListElement.append(emptyElement);
+        return;
+    }
+
+    for (const node of nodes) {
+        const nodeElement = document.createElement("button");
+        nodeElement.className = "bootstrap-node";
+        nodeElement.type = "button";
+        nodeElement.classList.toggle("is-selected", bootstrapNodeKey(node) === selectedBootstrapKey);
+        nodeElement.setAttribute("aria-pressed", bootstrapNodeKey(node) === selectedBootstrapKey ? "true" : "false");
+        nodeElement.addEventListener("click", async () => {
+            selectBootstrapNode(node);
+            renderBootstrapNodes(nodes);
+            await connectBootstrapEndpoint(node.host, node.port, node.nodeId, node.name || node.endpoint || "bootstrap node");
+        });
+
+        const headerElement = document.createElement("div");
+        headerElement.className = "bootstrap-node-header";
+
+        const nameWrapElement = document.createElement("div");
+        const nameElement = document.createElement("h4");
+        nameElement.className = "bootstrap-node-name";
+        nameElement.textContent = node.name || "Unnamed node";
+
+        const endpointElement = document.createElement("p");
+        endpointElement.className = "bootstrap-node-endpoint";
+        endpointElement.textContent = node.endpoint || `${node.host || "unknown"}:${node.port || "?"}`;
+
+        const latencyElement = document.createElement("span");
+        latencyElement.className = "bootstrap-latency";
+        latencyElement.textContent = formatBootstrapLatency(node);
+        latencyElement.classList.toggle("is-unreachable", !node.reachable);
+
+        nameWrapElement.append(nameElement, endpointElement);
+        headerElement.append(nameWrapElement, latencyElement);
+
+        const nodeIDElement = document.createElement("p");
+        nodeIDElement.className = "bootstrap-node-id";
+        nodeIDElement.textContent = node.nodeId || "NodeID unavailable";
+
+        nodeElement.append(headerElement, nodeIDElement);
+        bootstrapNodeListElement.append(nodeElement);
+    }
+}
+
+function applyBootstrapState(bootstrapState) {
+    if (!bootstrapState || typeof bootstrapState !== "object" || Array.isArray(bootstrapState)) {
+        hideBootstrapScreen();
+        return;
+    }
+
+    if (!bootstrapState.needsBootstrap) {
+        hideBootstrapScreen();
+        return;
+    }
+
+    showBootstrapScreen();
+    renderBootstrapNodes(bootstrapState.nodes);
+
+    if (Number(bootstrapState.peerCount || 0) > 0) {
+        bootstrapMetaElement.textContent = `${bootstrapState.peerCount} peer file(s) already exist locally.`;
+    } else if (Array.isArray(bootstrapState.nodes) && bootstrapState.nodes.length > 0) {
+        bootstrapMetaElement.textContent = `${bootstrapState.nodes.length} bootstrap node(s), sorted from lowest to highest latency.`;
+    } else {
+        bootstrapMetaElement.textContent = "No bootstrap nodes could be ranked yet.";
+    }
+
+    if (bootstrapState.error) {
+        bootstrapErrorElement.textContent = bootstrapState.error;
+        bootstrapErrorElement.classList.remove("hidden");
+        statusElement.textContent = "Bootstrap required";
+    } else {
+        bootstrapErrorElement.textContent = "";
+        bootstrapErrorElement.classList.add("hidden");
+        statusElement.textContent = "Bootstrap required";
+    }
+
+    if (bootstrapCustomPortElement && bootstrapCustomPortElement.value === "") {
+        bootstrapCustomPortElement.value = "58103";
+    }
+    if (!awaitingBootstrapPassword && bootstrapPasswordMetaElement) {
+        bootstrapPasswordMetaElement.textContent = "Choose a bootstrap node first.";
+    }
+}
+
+async function loadBootstrapState() {
+    try {
+        const bootstrapState = await appBridge.BootstrapState();
+        applyBootstrapState(bootstrapState);
+        return bootstrapState;
+    } catch (error) {
+        showBootstrapScreen();
+        renderBootstrapNodes([]);
+        bootstrapMetaElement.textContent = "Bootstrap discovery failed.";
+        bootstrapErrorElement.textContent = String(error);
+        bootstrapErrorElement.classList.remove("hidden");
+        statusElement.textContent = "Bootstrap required";
+        console.error(error);
+        return null;
+    }
+}
+
 function applyUpdateStatus(updateStatus) {
     versionElement.textContent = `${formatVersion(updateStatus.currentVersion)} (remote ${formatVersion(updateStatus.remoteVersion)})`;
     syncUpdateModal(updateStatus);
@@ -175,7 +490,7 @@ function bindDashboardEvents() {
                 return;
             }
 
-            statusElement.textContent = "Dashboard ready";
+            statusElement.textContent = bootstrapRequired ? "Bootstrap required" : "Dashboard ready";
         }, -1),
     );
 }
@@ -203,12 +518,16 @@ async function loadShellState() {
         await loadDiskUsage();
         await loadBandwidthUsage();
         applyUpdateStatus(updateStatus);
-        statusElement.textContent = "Dashboard ready";
+        const bootstrapState = await loadBootstrapState();
+        if (!bootstrapState?.needsBootstrap) {
+            statusElement.textContent = "Dashboard ready";
+        }
     } catch (error) {
         setMetric("node.nodeId", "Unable to load NodeID");
         fieldElements.get("node.nodeId")?.classList.remove("is-placeholder");
         versionElement.textContent = "unknown (remote unavailable)";
         statusElement.textContent = "Failed to resolve dashboard";
+        hideBootstrapScreen();
         hideUpdateModal();
         console.error(error);
     }
@@ -406,11 +725,47 @@ function startDiskUsageChecks() {
     }, diskUsageRefreshIntervalMs);
 }
 
+function startBootstrapChecks() {
+    if (bootstrapRefreshTimer !== null) {
+        return;
+    }
+
+    bootstrapRefreshTimer = globalThis.setInterval(() => {
+        if (!bootstrapRequired) {
+            return;
+        }
+
+        void loadBootstrapState();
+    }, bootstrapRefreshIntervalMs);
+}
+
 updateNowButton.addEventListener("click", () => {
     void triggerUpdateNow();
 });
 exitAppButton.addEventListener("click", () => {
     void exitApplication();
+});
+bootstrapRefreshButton.addEventListener("click", () => {
+    bootstrapMetaElement.textContent = "Refreshing bootstrap latency...";
+    void loadBootstrapState();
+});
+bootstrapCustomConnectButton.addEventListener("click", () => {
+    const host = bootstrapCustomHostElement.value.trim();
+    const port = Number.parseInt(bootstrapCustomPortElement.value.trim(), 10);
+    void connectBootstrapEndpoint(host, port, "", host || "custom bootstrap");
+});
+
+bootstrapPasswordSubmitButton.addEventListener("click", () => {
+    void completeBootstrapSession();
+});
+
+bootstrapPasswordElement.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+        return;
+    }
+
+    event.preventDefault();
+    void completeBootstrapSession();
 });
 updateDialogElement.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -420,3 +775,4 @@ globalThis.addEventListener("beforeunload", releaseDashboardEvents);
 bindDashboardEvents();
 await loadShellState();
 startDiskUsageChecks();
+startBootstrapChecks();

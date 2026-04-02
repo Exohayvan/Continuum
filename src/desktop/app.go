@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"continuum/src/bootstrapmanager"
 	"continuum/src/datamanager"
 	"continuum/src/networkmanager"
 	"continuum/src/nodeid"
@@ -14,6 +15,10 @@ import (
 
 var (
 	resolveNodeID        = nodeid.GetNodeID
+	resolveBootstrap     = bootstrapmanager.LoadState
+	startBootstrapServer = bootstrapmanager.StartService
+	connectBootstrap     = bootstrapmanager.Connect
+	completeBootstrap    = bootstrapmanager.Complete
 	resolveDiskUsage     = datamanager.Snapshot
 	resolveNetworkUsage  = networkmanager.Snapshot
 	resolveVersion       = version.Get
@@ -62,12 +67,29 @@ func (a *App) Startup(ctx context.Context) {
 
 		emitRuntimeEvent(ctx, "updater:status", status)
 	})
+	startBootstrapServer()
 	startUpdaterLoop()
 }
 
 // NodeID returns the machine's deterministic node identifier.
 func (a *App) NodeID() string {
 	return resolveNodeID()
+}
+
+// BootstrapState returns the current bootstrap discovery view model.
+func (a *App) BootstrapState() bootstrapmanager.State {
+	return resolveBootstrap()
+}
+
+// ConnectBootstrap attempts the initial bootstrap handshake against a selected node.
+func (a *App) ConnectBootstrap(host string, port int, nodeID string) (bootstrapmanager.ConnectResult, error) {
+	return connectBootstrap(host, port, nodeID)
+}
+
+// CompleteBootstrap resumes a held bootstrap session after the UI collects the
+// required account password.
+func (a *App) CompleteBootstrap(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
+	return completeBootstrap(sessionID, password)
 }
 
 // DiskUsage returns the current managed-data disk usage snapshot.

@@ -19,6 +19,72 @@
         <button class="button-secondary" id="exit-app" type="button">Exit</button>
     </div>
 </dialog>
+<section class="bootstrap-screen hidden" id="bootstrap-screen" aria-labelledby="bootstrap-title">
+    <div class="bootstrap-shell">
+        <div class="bootstrap-header">
+            <p class="eyebrow">Bootstrap Required</p>
+            <h2 id="bootstrap-title">No known peers were found.</h2>
+            <p class="bootstrap-copy" id="bootstrap-copy">
+                Continuum did not find any <code>.peer</code> files in <code>./data/network/peers</code>. Choose a bootstrap node from GitHub or enter a custom IPv4 endpoint.
+            </p>
+        </div>
+
+        <div class="bootstrap-grid">
+            <section class="bootstrap-panel">
+                <div class="bootstrap-panel-header">
+                    <div>
+                        <h3>Known Bootstrap Nodes</h3>
+                        <p class="bootstrap-meta" id="bootstrap-meta">Loading bootstrap nodes...</p>
+                    </div>
+                    <button class="button-secondary bootstrap-refresh" id="bootstrap-refresh" type="button">Refresh Latency</button>
+                </div>
+                <div class="bootstrap-node-list" id="bootstrap-node-list">
+                    <p class="bootstrap-empty">Checking GitHub bootstrap list...</p>
+                </div>
+            </section>
+
+            <section class="bootstrap-panel bootstrap-panel--custom">
+                <div class="bootstrap-panel-header">
+                    <h3>Custom IPv4</h3>
+                    <p class="bootstrap-meta">Manual endpoint entry for local or private bootstrap targets.</p>
+                </div>
+
+                <div class="bootstrap-form">
+                    <label class="bootstrap-label" for="bootstrap-custom-host">IPv4 Address</label>
+                    <input class="bootstrap-input" id="bootstrap-custom-host" inputmode="decimal" placeholder="192.168.1.40" type="text"/>
+
+                    <label class="bootstrap-label" for="bootstrap-custom-port">Port</label>
+                    <input class="bootstrap-input" id="bootstrap-custom-port" inputmode="numeric" placeholder="58103" type="text"/>
+                    <button id="bootstrap-custom-connect" type="button">Connect Custom Bootstrap</button>
+                </div>
+
+                <p class="bootstrap-note">
+                    Clicking a bootstrap node starts the held bootstrap session immediately. Custom IPv4 can do the same for private endpoints.
+                </p>
+                <p class="bootstrap-selection is-placeholder" id="bootstrap-selection">No bootstrap node selected yet.</p>
+            </section>
+
+            <section class="bootstrap-panel bootstrap-panel--password">
+                <div class="bootstrap-panel-header">
+                    <h3>Account Password</h3>
+                    <p class="bootstrap-meta" id="bootstrap-password-meta">Choose a bootstrap node first.</p>
+                </div>
+
+                <div class="bootstrap-form">
+                    <label class="bootstrap-label" for="bootstrap-password">Password</label>
+                    <input class="bootstrap-input" id="bootstrap-password" placeholder="Enter password" type="password"/>
+                    <button id="bootstrap-password-submit" type="button">Continue Bootstrap</button>
+                </div>
+
+                <p class="bootstrap-note">
+                    Existing accounts use this password to unlock the recovered account blob. New accounts use it to encrypt the new blob before it is seeded.
+                </p>
+            </section>
+        </div>
+
+        <p class="bootstrap-error hidden" id="bootstrap-error" role="status" aria-live="polite"></p>
+    </div>
+</section>
 <main class="shell">
     <section class="hero">
         <div class="hero-copy">

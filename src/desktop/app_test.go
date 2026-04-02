@@ -3,8 +3,10 @@ package desktop
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
+	"continuum/src/bootstrapmanager"
 	"continuum/src/datamanager"
 	"continuum/src/networkmanager"
 	"continuum/src/updater"
@@ -28,9 +30,11 @@ func TestStartupAcceptsContext(t *testing.T) {
 	originalQuitApplication := quitApplication
 	originalObserveUpdateStatus := observeUpdateStatus
 	originalStartUpdaterLoop := startUpdaterLoop
+	originalStartBootstrapServer := startBootstrapServer
 	received := context.Context(nil)
 	var observed func(updater.Status)
 	startedUpdater := false
+	startedBootstrap := false
 	quitApplication = func(ctx context.Context) {
 		received = ctx
 	}
@@ -38,12 +42,16 @@ func TestStartupAcceptsContext(t *testing.T) {
 		quitApplication = originalQuitApplication
 		observeUpdateStatus = originalObserveUpdateStatus
 		startUpdaterLoop = originalStartUpdaterLoop
+		startBootstrapServer = originalStartBootstrapServer
 	})
 	observeUpdateStatus = func(fn func(updater.Status)) {
 		observed = fn
 	}
 	startUpdaterLoop = func() {
 		startedUpdater = true
+	}
+	startBootstrapServer = func() {
+		startedBootstrap = true
 	}
 
 	app := NewApp()
@@ -60,6 +68,9 @@ func TestStartupAcceptsContext(t *testing.T) {
 	}
 	if !startedUpdater {
 		t.Fatal("Startup() did not start updater background loop")
+	}
+	if !startedBootstrap {
+		t.Fatal("Startup() did not start bootstrap listener")
 	}
 }
 
@@ -183,6 +194,100 @@ func TestNodeIDReturnsResolvedValue(t *testing.T) {
 	app := NewApp()
 	if got := app.NodeID(); got != testNodeID {
 		t.Fatalf("NodeID() = %q, want %q", got, testNodeID)
+	}
+}
+
+func TestBootstrapStateReturnsResolvedValue(t *testing.T) {
+	originalResolveBootstrap := resolveBootstrap
+	want := bootstrapmanager.State{
+		NeedsBootstrap: true,
+		PeerCount:      0,
+		Nodes: []bootstrapmanager.Node{
+			{
+				Name:                "na-east",
+				NodeID:              testNodeID,
+				Host:                "162.191.52.239",
+				Port:                58103,
+				Endpoint:            "162.191.52.239:58103",
+				Reachable:           true,
+				LatencyMilliseconds: 12,
+			},
+		},
+	}
+	resolveBootstrap = func() bootstrapmanager.State { return want }
+	t.Cleanup(func() {
+		resolveBootstrap = originalResolveBootstrap
+	})
+
+	app := NewApp()
+	if got := app.BootstrapState(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("BootstrapState() = %#v, want %#v", got, want)
+	}
+}
+
+func TestConnectBootstrapReturnsResolvedValue(t *testing.T) {
+	originalConnectBootstrap := connectBootstrap
+	want := bootstrapmanager.ConnectResult{
+		AwaitingPassword:  true,
+		RecoveryAvailable: true,
+		SessionID:         "session-123",
+		AccountID:         "account-123",
+		ObservedIPv4:      "162.191.52.239",
+		Port:              58103,
+		Reachable:         true,
+		Message:           "password required",
+	}
+	connectBootstrap = func(host string, port int, nodeID string) (bootstrapmanager.ConnectResult, error) {
+		if host != "162.191.52.239" || port != 58103 || nodeID != testNodeID {
+			t.Fatalf("connectBootstrap() args = (%q, %d, %q), want (%q, %d, %q)", host, port, nodeID, "162.191.52.239", 58103, testNodeID)
+		}
+		return want, nil
+	}
+	t.Cleanup(func() {
+		connectBootstrap = originalConnectBootstrap
+	})
+
+	app := NewApp()
+	got, err := app.ConnectBootstrap("162.191.52.239", 58103, testNodeID)
+	if err != nil {
+		t.Fatalf("ConnectBootstrap() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ConnectBootstrap() = %#v, want %#v", got, want)
+	}
+}
+
+func TestCompleteBootstrapReturnsResolvedValue(t *testing.T) {
+	originalCompleteBootstrap := completeBootstrap
+	want := bootstrapmanager.ConnectResult{
+		Connected:       true,
+		AccountID:       "account-123",
+		ObservedIPv4:    "162.191.52.239",
+		Port:            58103,
+		Reachable:       true,
+		PeerFile:        "network/peers/node-123.peer",
+		MetaFile:        "network/peers/node-123.meta",
+		AccountBlobFile: "network/accounts/account-123.blob",
+		LocalKeyFile:    "local/account/account-123.key",
+		Message:         "bootstrap complete",
+	}
+	completeBootstrap = func(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
+		if sessionID != "session-123" || password != "super-secret" {
+			t.Fatalf("completeBootstrap() args = (%q, %q), want (%q, %q)", sessionID, password, "session-123", "super-secret")
+		}
+		return want, nil
+	}
+	t.Cleanup(func() {
+		completeBootstrap = originalCompleteBootstrap
+	})
+
+	app := NewApp()
+	got, err := app.CompleteBootstrap("session-123", "super-secret")
+	if err != nil {
+		t.Fatalf("CompleteBootstrap() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CompleteBootstrap() = %#v, want %#v", got, want)
 	}
 }
 
