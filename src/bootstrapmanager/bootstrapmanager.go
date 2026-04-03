@@ -255,8 +255,14 @@ func loadBootstrapNodes(ctx context.Context) ([]Node, error) {
 		return nil, err
 	}
 
+	nodes := bootstrapNodesFromList(list)
+	probeBootstrapNodes(nodes, resolveNodeID())
+	sortBootstrapNodes(nodes)
+	return nodes, nil
+}
+
+func bootstrapNodesFromList(list bootstrapList) []Node {
 	nodes := make([]Node, 0, len(list.Nodes))
-	localNodeID := resolveNodeID()
 	for name, config := range list.Nodes {
 		nodes = append(nodes, Node{
 			Name:     name,
@@ -267,34 +273,46 @@ func loadBootstrapNodes(ctx context.Context) ([]Node, error) {
 		})
 	}
 
+	return nodes
+}
+
+func probeBootstrapNodes(nodes []Node, localNodeID string) {
 	var wg sync.WaitGroup
 	for index := range nodes {
 		wg.Add(1)
 		go func(node *Node) {
 			defer wg.Done()
-
-			if node.Host == "" || node.Port <= 0 {
-				node.Error = "invalid endpoint"
-				return
-			}
-
-			probeHost := node.Host
-			if node.NodeID != "" && node.NodeID == localNodeID {
-				probeHost = "127.0.0.1"
-			}
-
-			latency, err := probeEndpoint(probeHost, node.Port)
-			if err != nil {
-				node.Error = err.Error()
-				return
-			}
-
-			node.Reachable = true
-			node.LatencyMilliseconds = max(1, latency.Milliseconds())
+			probeBootstrapNode(node, localNodeID)
 		}(&nodes[index])
 	}
 	wg.Wait()
+}
 
+func probeBootstrapNode(node *Node, localNodeID string) {
+	if node.Host == "" || node.Port <= 0 {
+		node.Error = "invalid endpoint"
+		return
+	}
+
+	latency, err := probeEndpoint(bootstrapProbeHost(*node, localNodeID), node.Port)
+	if err != nil {
+		node.Error = err.Error()
+		return
+	}
+
+	node.Reachable = true
+	node.LatencyMilliseconds = max(1, latency.Milliseconds())
+}
+
+func bootstrapProbeHost(node Node, localNodeID string) string {
+	if node.NodeID != "" && node.NodeID == localNodeID {
+		return "127.0.0.1"
+	}
+
+	return node.Host
+}
+
+func sortBootstrapNodes(nodes []Node) {
 	sort.SliceStable(nodes, func(left, right int) bool {
 		leftNode := nodes[left]
 		rightNode := nodes[right]
@@ -308,8 +326,6 @@ func loadBootstrapNodes(ctx context.Context) ([]Node, error) {
 
 		return leftNode.Name < rightNode.Name
 	})
-
-	return nodes, nil
 }
 
 func loadBootstrapList(ctx context.Context) (bootstrapList, error) {
@@ -460,93 +476,171 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 }
 
 func Complete(sessionID, password string) (ConnectResult, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return ConnectResult{}, errors.New("bootstrap session id is required")
-	}
-	if strings.TrimSpace(password) == "" {
-		return ConnectResult{}, errors.New("bootstrap password is required")
+	if err := validateCompletionInputs(sessionID, password); err != nil {
+		return ConnectResult{}, err
 	}
 
-	session, ok := getPendingSession(sessionID)
-	if !ok {
-		return ConnectResult{}, errors.New("bootstrap session expired or was not found")
-	}
-
-	var (
-		material accounts.Material
-		err      error
-	)
-	if session.response.RecoveryAvailable {
-		material, err = recoverAccount(session.response.AccountBlob, password)
-	} else {
-		material, err = createAccount(password)
-	}
+	session, err := pendingSessionForCompletion(sessionID)
 	if err != nil {
 		return ConnectResult{}, err
 	}
 
-	firstSeen := session.response.FirstSeen
-	if strings.TrimSpace(firstSeen) == "" {
-		firstSeen = currentTime().UTC().Format(time.RFC3339)
+	material, err := completionMaterial(session.response, password)
+	if err != nil {
+		return ConnectResult{}, err
 	}
-	revision := session.response.Revision
+
+	artifacts, err := buildCompletionArtifacts(session, material)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	peerPath, metaPath, accountBlobPath, err := writeNetworkFiles(
+		session.nodeID,
+		material.AccountID,
+		artifacts.peerData,
+		artifacts.metaData,
+		material.BlobData,
+		artifacts.accountPubKeyData,
+		artifacts.accountMetaData,
+	)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	if err := finalizeBootstrapSession(sessionID, session, material, artifacts); err != nil {
+		return ConnectResult{}, err
+	}
+
+	return completedConnectResult(session, material, peerPath, metaPath, accountBlobPath), nil
+}
+
+type completionArtifacts struct {
+	peerData          []byte
+	metaData          []byte
+	accountPubKeyData []byte
+	accountMetaData   []byte
+}
+
+type completionState struct {
+	firstSeen        string
+	revision         int
+	accountCreatedAt string
+	accountRevision  int
+}
+
+func validateCompletionInputs(sessionID, password string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("bootstrap session id is required")
+	}
+	if strings.TrimSpace(password) == "" {
+		return errors.New("bootstrap password is required")
+	}
+
+	return nil
+}
+
+func pendingSessionForCompletion(sessionID string) (*pendingSession, error) {
+	session, ok := getPendingSession(sessionID)
+	if !ok {
+		return nil, errors.New("bootstrap session expired or was not found")
+	}
+
+	return session, nil
+}
+
+func completionMaterial(response bootstrapSessionStartResponse, password string) (accounts.Material, error) {
+	if response.RecoveryAvailable {
+		return recoverAccount(response.AccountBlob, password)
+	}
+
+	return createAccount(password)
+}
+
+func buildCompletionArtifacts(session *pendingSession, material accounts.Material) (completionArtifacts, error) {
+	state := normalizeCompletionState(session.response)
+
+	peerData, err := buildPeerFile(session.response.ObservedIPv4, session.response.Port, material.AccountID, material.PrivateKey)
+	if err != nil {
+		return completionArtifacts{}, err
+	}
+	metaData, err := buildMetaFile(session.nodeID, material.AccountID, state.firstSeen, state.revision, material.PrivateKey)
+	if err != nil {
+		return completionArtifacts{}, err
+	}
+	accountPubKeyData := accounts.BuildPublicKeyFile(material.PublicKey)
+	accountMetaData, err := accounts.BuildMeta(material.AccountID, material.PublicKey, state.accountCreatedAt, state.accountRevision, material.PrivateKey)
+	if err != nil {
+		return completionArtifacts{}, err
+	}
+
+	return completionArtifacts{
+		peerData:          peerData,
+		metaData:          metaData,
+		accountPubKeyData: accountPubKeyData,
+		accountMetaData:   accountMetaData,
+	}, nil
+}
+
+func normalizeCompletionState(response bootstrapSessionStartResponse) completionState {
+	now := currentTime().UTC().Format(time.RFC3339)
+
+	firstSeen := response.FirstSeen
+	if strings.TrimSpace(firstSeen) == "" {
+		firstSeen = now
+	}
+	revision := response.Revision
 	if revision <= 0 {
 		revision = 1
 	}
-	accountCreatedAt := session.response.AccountCreatedAt
+	accountCreatedAt := response.AccountCreatedAt
 	if strings.TrimSpace(accountCreatedAt) == "" {
-		accountCreatedAt = currentTime().UTC().Format(time.RFC3339)
+		accountCreatedAt = now
 	}
-	accountRevision := session.response.AccountRevision
+	accountRevision := response.AccountRevision
 	if accountRevision <= 0 {
 		accountRevision = 1
 	}
 
-	peerData, err := buildPeerFile(session.response.ObservedIPv4, session.response.Port, material.AccountID, material.PrivateKey)
-	if err != nil {
-		return ConnectResult{}, err
+	return completionState{
+		firstSeen:        firstSeen,
+		revision:         revision,
+		accountCreatedAt: accountCreatedAt,
+		accountRevision:  accountRevision,
 	}
-	metaData, err := buildMetaFile(session.nodeID, material.AccountID, firstSeen, revision, material.PrivateKey)
-	if err != nil {
-		return ConnectResult{}, err
-	}
-	accountPubKeyData := accounts.BuildPublicKeyFile(material.PublicKey)
-	accountMetaData, err := accounts.BuildMeta(material.AccountID, material.PublicKey, accountCreatedAt, accountRevision, material.PrivateKey)
-	if err != nil {
-		return ConnectResult{}, err
-	}
+}
 
-	peerPath, metaPath, accountBlobPath, err := writeNetworkFiles(session.nodeID, material.AccountID, peerData, metaData, material.BlobData, accountPubKeyData, accountMetaData)
-	if err != nil {
-		return ConnectResult{}, err
-	}
-
+func finalizeBootstrapSession(sessionID string, session *pendingSession, material accounts.Material, artifacts completionArtifacts) error {
 	finalizeRequest := bootstrapSessionFinalizeRequest{
 		Type:          "finalize",
 		NodeID:        session.nodeID,
 		AccountID:     material.AccountID,
-		PeerData:      peerData,
-		MetaData:      metaData,
+		PeerData:      artifacts.peerData,
+		MetaData:      artifacts.metaData,
 		AccountBlob:   material.BlobData,
-		AccountPubKey: accountPubKeyData,
-		AccountMeta:   accountMetaData,
+		AccountPubKey: artifacts.accountPubKeyData,
+		AccountMeta:   artifacts.accountMetaData,
 	}
 	if err := json.NewEncoder(session.conn).Encode(finalizeRequest); err != nil {
 		removePendingSession(sessionID)
-		return ConnectResult{}, err
+		return err
 	}
 
 	var finalizeResponse bootstrapSessionFinalizeResponse
 	if err := json.NewDecoder(session.conn).Decode(&finalizeResponse); err != nil {
 		removePendingSession(sessionID)
-		return ConnectResult{}, err
+		return err
 	}
 	removePendingSession(sessionID)
 
 	if finalizeResponse.Error != "" {
-		return ConnectResult{}, errors.New(finalizeResponse.Error)
+		return errors.New(finalizeResponse.Error)
 	}
 
+	return nil
+}
+
+func completedConnectResult(session *pendingSession, material accounts.Material, peerPath, metaPath, accountBlobPath string) ConnectResult {
 	result := ConnectResult{
 		Connected:       true,
 		AccountID:       material.AccountID,
@@ -560,11 +654,11 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 	}
 	if session.response.Reachable {
 		result.Message = fmt.Sprintf("Bootstrap completed. Saved %s, %s, %s, and %s.", material.LocalKeyPath, peerPath, metaPath, accountBlobPath)
-	} else {
-		result.Message = fmt.Sprintf("Bootstrap completed in degraded mode. Saved %s, %s, %s, and %s.", material.LocalKeyPath, peerPath, metaPath, accountBlobPath)
+		return result
 	}
 
-	return result, nil
+	result.Message = fmt.Sprintf("Bootstrap completed in degraded mode. Saved %s, %s, %s, and %s.", material.LocalKeyPath, peerPath, metaPath, accountBlobPath)
+	return result
 }
 
 func startBootstrapService(ctx context.Context) error {
@@ -721,92 +815,142 @@ func buildBootstrapStartResponse(remoteAddr net.Addr, request bootstrapSessionSt
 }
 
 func loadExistingNodeRecords(nodeID string) (existingNodeRecords, error) {
-	if strings.TrimSpace(nodeID) == "" {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
 		return existingNodeRecords{}, nil
 	}
 
-	peerPath := peerRelativePath(nodeID)
-	if _, err := readManagedFile(peerPath); err != nil {
+	if err := ensureKnownNodeExists(nodeID); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return existingNodeRecords{}, nil
 		}
 		return existingNodeRecords{}, err
 	}
 
-	metaPath := metaRelativePath(nodeID)
-	metaData, err := readManagedFile(metaPath)
+	metaData, existingMeta, hasMeta, err := loadExistingNodeMeta(nodeID)
+	if err != nil {
+		return existingNodeRecords{}, err
+	}
+	if !hasMeta {
+		return existingNodeRecords{KnownNode: true}, nil
+	}
+
+	records := existingNodeRecords{NodeMeta: existingMeta, KnownNode: true}
+	if strings.TrimSpace(existingMeta.AccountID) == "" {
+		return records, nil
+	}
+
+	return loadExistingAccountRecords(nodeID, metaData, records)
+}
+
+func ensureKnownNodeExists(nodeID string) error {
+	_, err := readManagedFile(peerRelativePath(nodeID))
+	return err
+}
+
+func loadExistingNodeMeta(nodeID string) ([]byte, metaFile, bool, error) {
+	metaData, err := readManagedFile(metaRelativePath(nodeID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return existingNodeRecords{KnownNode: true}, nil
+			return nil, metaFile{}, false, nil
 		}
-		return existingNodeRecords{}, err
+		return nil, metaFile{}, false, err
 	}
 
 	var existingMeta metaFile
 	if err := json.Unmarshal(metaData, &existingMeta); err != nil {
-		return existingNodeRecords{}, err
-	}
-	if strings.TrimSpace(existingMeta.AccountID) == "" {
-		return existingNodeRecords{NodeMeta: existingMeta, KnownNode: true}, nil
+		return nil, metaFile{}, false, err
 	}
 
-	accountPubKeyPath := accountPubKeyRelativePath(existingMeta.AccountID)
-	accountPubKeyData, err := readManagedFile(accountPubKeyPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return existingNodeRecords{NodeMeta: existingMeta, KnownNode: true}, nil
-		}
-		return existingNodeRecords{}, err
-	}
-	accountPubKey, err := accounts.VerifyPublicKeyFile(existingMeta.AccountID, accountPubKeyData)
-	if err != nil {
-		return existingNodeRecords{}, err
-	}
+	return metaData, existingMeta, true, nil
+}
 
-	accountMetaPath := accountMetaRelativePath(existingMeta.AccountID)
-	accountMetaData, err := readManagedFile(accountMetaPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return existingNodeRecords{NodeMeta: existingMeta, AccountPubKey: accountPubKey, KnownNode: true}, nil
-		}
-		return existingNodeRecords{}, err
-	}
-	accountMeta, err := accounts.VerifyMeta(existingMeta.AccountID, accountPubKey, accountMetaData)
+func loadExistingAccountRecords(nodeID string, metaData []byte, records existingNodeRecords) (existingNodeRecords, error) {
+	accountPubKey, hasPubKey, err := loadExistingAccountPubKey(records.NodeMeta.AccountID)
 	if err != nil {
 		return existingNodeRecords{}, err
 	}
-	if err := verifyMetaFile(metaData, nodeID, existingMeta.AccountID, accountPubKey); err != nil {
+	if !hasPubKey {
+		return records, nil
+	}
+	records.AccountPubKey = accountPubKey
+
+	accountMeta, hasAccountMeta, err := loadExistingAccountMeta(records.NodeMeta.AccountID, accountPubKey)
+	if err != nil {
+		return existingNodeRecords{}, err
+	}
+	if !hasAccountMeta {
+		return records, nil
+	}
+	records.AccountMeta = accountMeta
+
+	if err := verifyMetaFile(metaData, nodeID, records.NodeMeta.AccountID, accountPubKey); err != nil {
 		return existingNodeRecords{}, err
 	}
 
-	accountBlobPath := accountBlobRelativePath(existingMeta.AccountID)
-	blobData, err := readManagedFile(accountBlobPath)
+	accountBlob, hasBlob, err := loadExistingAccountBlob(records.NodeMeta.AccountID, accountPubKey)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return existingNodeRecords{
-				NodeMeta:      existingMeta,
-				AccountMeta:   accountMeta,
-				AccountPubKey: accountPubKey,
-				KnownNode:     true,
-			}, nil
-		}
 		return existingNodeRecords{}, err
 	}
+	if hasBlob {
+		records.AccountBlob = accountBlob
+	}
+
+	return records, nil
+}
+
+func loadExistingAccountPubKey(accountID string) (ed25519.PublicKey, bool, error) {
+	accountPubKeyData, err := readManagedFile(accountPubKeyRelativePath(accountID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return accountPubKey, true, nil
+}
+
+func loadExistingAccountMeta(accountID string, accountPubKey ed25519.PublicKey) (accounts.Meta, bool, error) {
+	accountMetaData, err := readManagedFile(accountMetaRelativePath(accountID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return accounts.Meta{}, false, nil
+		}
+		return accounts.Meta{}, false, err
+	}
+
+	accountMeta, err := accounts.VerifyMeta(accountID, accountPubKey, accountMetaData)
+	if err != nil {
+		return accounts.Meta{}, false, err
+	}
+
+	return accountMeta, true, nil
+}
+
+func loadExistingAccountBlob(accountID string, accountPubKey ed25519.PublicKey) ([]byte, bool, error) {
+	blobData, err := readManagedFile(accountBlobRelativePath(accountID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
 	_, blobPublicKey, err := accounts.ValidateBlob(blobData)
 	if err != nil {
-		return existingNodeRecords{}, err
+		return nil, false, err
 	}
 	if !ed25519.PublicKey(blobPublicKey).Equal(accountPubKey) {
-		return existingNodeRecords{}, errors.New("account blob public key does not match trusted account pubkey")
+		return nil, false, errors.New("account blob public key does not match trusted account pubkey")
 	}
 
-	return existingNodeRecords{
-		NodeMeta:      existingMeta,
-		AccountMeta:   accountMeta,
-		AccountPubKey: accountPubKey,
-		AccountBlob:   blobData,
-		KnownNode:     true,
-	}, nil
+	return blobData, true, nil
 }
 
 func extractObservedIPv4(remoteAddr net.Addr) (string, error) {
