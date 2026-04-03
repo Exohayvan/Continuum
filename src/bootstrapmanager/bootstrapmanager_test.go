@@ -21,6 +21,25 @@ import (
 	"continuum/src/nodeid"
 )
 
+const (
+	testBootstrapHost      = "162.191.52.239"
+	testBootstrapTimestamp = "2026-04-02T00:00:00Z"
+	testJoiningNodeID      = "joining-node"
+	testJoiningPeerFile    = "joining-node.peer"
+	testJoiningMetaFile    = "joining-node.meta"
+	testDecodeErrorFormat  = "Decode() error = %v"
+	testEncodeErrorFormat  = "Encode() error = %v"
+	testAccountID          = "account-123"
+	testAccountPassword    = "secret-pass"
+	testAccountKeyFile     = "account-123.key"
+	testAccountBlobFile    = "account-123.blob"
+	testAccountBlobJSON    = `{"AccountID":"account-123"}`
+	testSessionID          = "session-123"
+	testRecoveryPassword   = "recovery-pass"
+	testRecoverySessionID  = "session-recover"
+	testBootstrapNodeID    = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
+)
+
 func TestLoadStateReturnsExistingPeerCount(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -77,8 +96,8 @@ func TestLoadStateFetchesAndSortsBootstrapNodes(t *testing.T) {
 		return bootstrapList, nil
 	}
 	probeEndpoint = func(host string, port int) (time.Duration, error) {
-		if host != "162.191.52.239" {
-			t.Fatalf("probeEndpoint() host = %q, want %q", host, "162.191.52.239")
+		if host != testBootstrapHost {
+			t.Fatalf("probeEndpoint() host = %q, want %q", host, testBootstrapHost)
 		}
 		return 12 * time.Millisecond, nil
 	}
@@ -99,7 +118,7 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures("2026-04-02T00:00:00Z")
+	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
 		t.Fatalf("buildAccountFixtures() error = %v", err)
 	}
@@ -109,10 +128,10 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 	}
 	readManagedFile = func(path string) ([]byte, error) {
 		switch path {
-		case filepath.Join("network", "peers", "joining-node.peer"):
+		case testPeerPath():
 			return []byte(`{}`), nil
-		case filepath.Join("network", "peers", "joining-node.meta"):
-			return buildSignedMetaFixture(t, privateKey, "joining-node", accountID, "2026-04-02T00:00:00Z", 7), nil
+		case testMetaPath():
+			return buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 7), nil
 		case filepath.Join("network", "accounts", accountID+pubkeyFileSuffix):
 			return accountPubKeyData, nil
 		case filepath.Join("network", "accounts", accountID+metaFileSuffix):
@@ -124,14 +143,14 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 		}
 	}
 
-	response := buildBootstrapStartResponse(&net.TCPAddr{IP: net.ParseIP("162.191.52.239"), Port: 43001}, bootstrapSessionStartRequest{
+	response := buildBootstrapStartResponse(&net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001}, bootstrapSessionStartRequest{
 		Type:       "start",
-		NodeID:     "joining-node",
+		NodeID:     testJoiningNodeID,
 		ListenPort: 58103,
 	})
 
-	if response.ObservedIPv4 != "162.191.52.239" {
-		t.Fatalf("buildBootstrapStartResponse().ObservedIPv4 = %q, want %q", response.ObservedIPv4, "162.191.52.239")
+	if response.ObservedIPv4 != testBootstrapHost {
+		t.Fatalf("buildBootstrapStartResponse().ObservedIPv4 = %q, want %q", response.ObservedIPv4, testBootstrapHost)
 	}
 	if response.Port != 58103 {
 		t.Fatalf("buildBootstrapStartResponse().Port = %d, want %d", response.Port, 58103)
@@ -145,14 +164,14 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 	if response.AccountID != accountID {
 		t.Fatalf("buildBootstrapStartResponse().AccountID = %q, want %q", response.AccountID, accountID)
 	}
-	if response.FirstSeen != "2026-04-02T00:00:00Z" {
-		t.Fatalf("buildBootstrapStartResponse().FirstSeen = %q, want %q", response.FirstSeen, "2026-04-02T00:00:00Z")
+	if response.FirstSeen != testBootstrapTimestamp {
+		t.Fatalf("buildBootstrapStartResponse().FirstSeen = %q, want %q", response.FirstSeen, testBootstrapTimestamp)
 	}
 	if response.Revision != 8 {
 		t.Fatalf("buildBootstrapStartResponse().Revision = %d, want %d", response.Revision, 8)
 	}
-	if response.AccountCreatedAt != "2026-04-02T00:00:00Z" {
-		t.Fatalf("buildBootstrapStartResponse().AccountCreatedAt = %q, want %q", response.AccountCreatedAt, "2026-04-02T00:00:00Z")
+	if response.AccountCreatedAt != testBootstrapTimestamp {
+		t.Fatalf("buildBootstrapStartResponse().AccountCreatedAt = %q, want %q", response.AccountCreatedAt, testBootstrapTimestamp)
 	}
 	if response.AccountRevision != 2 {
 		t.Fatalf("buildBootstrapStartResponse().AccountRevision = %d, want %d", response.AccountRevision, 2)
@@ -164,7 +183,7 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	defer restore()
 
 	resolveNodeID = func() string {
-		return "joining-node"
+		return testJoiningNodeID
 	}
 	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
@@ -181,27 +200,27 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 
 		var request bootstrapSessionStartRequest
 		if err := json.NewDecoder(serverConn).Decode(&request); err != nil {
-			t.Errorf("Decode() error = %v", err)
+			t.Errorf(testDecodeErrorFormat, err)
 			return
 		}
-		if request.NodeID != "joining-node" {
-			t.Errorf("request.NodeID = %q, want %q", request.NodeID, "joining-node")
+		if request.NodeID != testJoiningNodeID {
+			t.Errorf("request.NodeID = %q, want %q", request.NodeID, testJoiningNodeID)
 		}
 
 		if err := json.NewEncoder(serverConn).Encode(bootstrapSessionStartResponse{
-			ObservedIPv4:      "162.191.52.239",
+			ObservedIPv4:      testBootstrapHost,
 			Port:              58103,
 			Reachable:         true,
 			RecoveryAvailable: true,
-			AccountID:         "account-123",
-			FirstSeen:         "2026-04-02T00:00:00Z",
+			AccountID:         testAccountID,
+			FirstSeen:         testBootstrapTimestamp,
 			Revision:          4,
 		}); err != nil {
-			t.Errorf("Encode() error = %v", err)
+			t.Errorf(testEncodeErrorFormat, err)
 		}
 	}()
 
-	result, err := Connect("162.191.52.239", 58103, "")
+	result, err := Connect(testBootstrapHost, 58103, "")
 	if err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
@@ -214,8 +233,8 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	if result.SessionID == "" {
 		t.Fatal("Connect() SessionID = empty, want non-empty")
 	}
-	if result.AccountID != "account-123" {
-		t.Fatalf("Connect() AccountID = %q, want %q", result.AccountID, "account-123")
+	if result.AccountID != testAccountID {
+		t.Fatalf("Connect() AccountID = %q, want %q", result.AccountID, testAccountID)
 	}
 
 	removePendingSession(result.SessionID)
@@ -315,7 +334,7 @@ func TestStartServiceInvokesBootstrapLoop(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	resolveNodeID = func() string { return "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45" }
+	resolveNodeID = func() string { return testBootstrapNodeID }
 	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
 		return bootstrapList, nil
@@ -340,7 +359,7 @@ func TestStartBootstrapServiceReturnsAcceptError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	resolveNodeID = func() string { return "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45" }
+	resolveNodeID = func() string { return testBootstrapNodeID }
 	bootstrapList := loadBootstrapListFixture(t)
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
 		return bootstrapList, nil
@@ -371,7 +390,7 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 		return 5 * time.Millisecond, nil
 	}
 
-	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures("2026-04-02T00:00:00Z")
+	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
 		t.Fatalf("buildAccountFixtures() error = %v", err)
 	}
@@ -386,12 +405,12 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 	defer clientConn.Close()
 	go handleBootstrapConnection(connWithRemoteAddr{
 		Conn:       serverConn,
-		remoteAddr: &net.TCPAddr{IP: net.ParseIP("162.191.52.239"), Port: 43001},
+		remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
 	})
 
 	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionStartRequest{
 		Type:       "start",
-		NodeID:     "joining-node",
+		NodeID:     testJoiningNodeID,
 		ListenPort: 58103,
 	}); err != nil {
 		t.Fatalf("Encode(start request) error = %v", err)
@@ -406,10 +425,10 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 	}
 
 	peerData := buildSignedPeerFixture(t, privateKey, startResponse.ObservedIPv4, startResponse.Port, accountID)
-	metaData := buildSignedMetaFixture(t, privateKey, "joining-node", accountID, startResponse.FirstSeen, startResponse.Revision)
+	metaData := buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, startResponse.FirstSeen, startResponse.Revision)
 	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionFinalizeRequest{
 		Type:          "finalize",
-		NodeID:        "joining-node",
+		NodeID:        testJoiningNodeID,
 		AccountID:     accountID,
 		PeerData:      peerData,
 		MetaData:      metaData,
@@ -436,40 +455,31 @@ func TestCompleteCreatesFilesAndFinalizesSession(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
-	}
+	material := testBootstrapMaterial(t)
 	createAccount = func(password string) (accounts.Material, error) {
-		if password != "secret-pass" {
-			t.Fatalf("createAccount() password = %q, want %q", password, "secret-pass")
+		if password != testAccountPassword {
+			t.Fatalf("createAccount() password = %q, want %q", password, testAccountPassword)
 		}
-		return accounts.Material{
-			AccountID:    "account-123",
-			LocalKeyPath: filepath.Join("local", "account", "account-123.key"),
-			PublicKey:    publicKey,
-			PrivateKey:   privateKey,
-			BlobData:     []byte(`{"AccountID":"account-123"}`),
-		}, nil
+		return material, nil
 	}
 
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	session := &pendingSession{
-		id:     "session-123",
+		id:     testSessionID,
 		conn:   clientConn,
-		nodeID: "joining-node",
+		nodeID: testJoiningNodeID,
 		response: bootstrapSessionStartResponse{
-			ObservedIPv4: "162.191.52.239",
+			ObservedIPv4: testBootstrapHost,
 			Port:         58103,
 			Reachable:    true,
-			FirstSeen:    "2026-04-02T00:00:00Z",
+			FirstSeen:    testBootstrapTimestamp,
 			Revision:     1,
 		},
 	}
 	storePendingSession(session)
 	t.Cleanup(func() {
-		removePendingSession("session-123")
+		removePendingSession(testSessionID)
 	})
 
 	writtenFiles := map[string][]byte{}
@@ -478,67 +488,14 @@ func TestCompleteCreatesFilesAndFinalizesSession(t *testing.T) {
 		return nil
 	}
 
-	go func() {
-		var finalizeRequest bootstrapSessionFinalizeRequest
-		if err := json.NewDecoder(serverConn).Decode(&finalizeRequest); err != nil {
-			t.Errorf("Decode() error = %v", err)
-			return
-		}
-		if finalizeRequest.NodeID != "joining-node" {
-			t.Errorf("finalizeRequest.NodeID = %q, want %q", finalizeRequest.NodeID, "joining-node")
-		}
-		if finalizeRequest.AccountID != "account-123" {
-			t.Errorf("finalizeRequest.AccountID = %q, want %q", finalizeRequest.AccountID, "account-123")
-		}
-		if len(finalizeRequest.AccountPubKey) == 0 {
-			t.Error("finalizeRequest.AccountPubKey = empty, want populated data")
-		}
-		if len(finalizeRequest.AccountMeta) == 0 {
-			t.Error("finalizeRequest.AccountMeta = empty, want populated data")
-		}
-		if err := json.NewEncoder(serverConn).Encode(bootstrapSessionFinalizeResponse{
-			PeerFile:        filepath.Join("network", "peers", "joining-node.peer"),
-			MetaFile:        filepath.Join("network", "peers", "joining-node.meta"),
-			AccountBlobFile: filepath.Join("network", "accounts", "account-123.blob"),
-		}); err != nil {
-			t.Errorf("Encode() error = %v", err)
-		}
-	}()
+	go respondToFinalizeRequest(t, serverConn)
 
-	result, err := Complete("session-123", "secret-pass")
+	result, err := Complete(testSessionID, testAccountPassword)
 	if err != nil {
 		t.Fatalf("Complete() error = %v", err)
 	}
-	if !result.Connected {
-		t.Fatal("Complete() Connected = false, want true")
-	}
-	if result.PeerFile != filepath.Join("network", "peers", "joining-node.peer") {
-		t.Fatalf("Complete() PeerFile = %q, want %q", result.PeerFile, filepath.Join("network", "peers", "joining-node.peer"))
-	}
-	if result.MetaFile != filepath.Join("network", "peers", "joining-node.meta") {
-		t.Fatalf("Complete() MetaFile = %q, want %q", result.MetaFile, filepath.Join("network", "peers", "joining-node.meta"))
-	}
-	if result.AccountBlobFile != filepath.Join("network", "accounts", "account-123.blob") {
-		t.Fatalf("Complete() AccountBlobFile = %q, want %q", result.AccountBlobFile, filepath.Join("network", "accounts", "account-123.blob"))
-	}
-	if result.LocalKeyFile != filepath.Join("local", "account", "account-123.key") {
-		t.Fatalf("Complete() LocalKeyFile = %q, want %q", result.LocalKeyFile, filepath.Join("local", "account", "account-123.key"))
-	}
-	if _, ok := writtenFiles[filepath.Join("network", "peers", "joining-node.peer")]; !ok {
-		t.Fatal("Complete() did not write the peer file locally")
-	}
-	if _, ok := writtenFiles[filepath.Join("network", "peers", "joining-node.meta")]; !ok {
-		t.Fatal("Complete() did not write the meta file locally")
-	}
-	if _, ok := writtenFiles[filepath.Join("network", "accounts", "account-123.blob")]; !ok {
-		t.Fatal("Complete() did not write the account blob locally")
-	}
-	if _, ok := writtenFiles[filepath.Join("network", "accounts", "account-123.pubkey")]; !ok {
-		t.Fatal("Complete() did not write the account pubkey locally")
-	}
-	if _, ok := writtenFiles[filepath.Join("network", "accounts", "account-123.meta")]; !ok {
-		t.Fatal("Complete() did not write the account meta locally")
-	}
+	assertCompleteResult(t, result)
+	assertBootstrapFilesWritten(t, writtenFiles)
 }
 
 func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
@@ -555,12 +512,12 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 		if string(blobData) != `{"blob":"data"}` {
 			t.Fatalf("recoverAccount() blobData = %s, want %s", string(blobData), `{"blob":"data"}`)
 		}
-		if password != "recovery-pass" {
-			t.Fatalf("recoverAccount() password = %q, want %q", password, "recovery-pass")
+		if password != testRecoveryPassword {
+			t.Fatalf("recoverAccount() password = %q, want %q", password, testRecoveryPassword)
 		}
 		return accounts.Material{
-			AccountID:    "account-123",
-			LocalKeyPath: filepath.Join("local", "account", "account-123.key"),
+			AccountID:    testAccountID,
+			LocalKeyPath: testAccountKeyPath(),
 			PublicKey:    publicKey,
 			PrivateKey:   privateKey,
 			BlobData:     []byte(`{"blob":"data"}`),
@@ -570,38 +527,38 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	session := &pendingSession{
-		id:     "session-recover",
+		id:     testRecoverySessionID,
 		conn:   clientConn,
-		nodeID: "joining-node",
+		nodeID: testJoiningNodeID,
 		response: bootstrapSessionStartResponse{
-			ObservedIPv4:      "162.191.52.239",
+			ObservedIPv4:      testBootstrapHost,
 			Port:              58103,
 			Reachable:         false,
 			RecoveryAvailable: true,
-			AccountID:         "account-123",
+			AccountID:         testAccountID,
 			AccountBlob:       []byte(`{"blob":"data"}`),
-			FirstSeen:         "2026-04-02T00:00:00Z",
+			FirstSeen:         testBootstrapTimestamp,
 			Revision:          9,
 		},
 	}
 	storePendingSession(session)
 	t.Cleanup(func() {
-		removePendingSession("session-recover")
+		removePendingSession(testRecoverySessionID)
 	})
 
 	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
 	go func() {
 		var finalizeRequest bootstrapSessionFinalizeRequest
 		if err := json.NewDecoder(serverConn).Decode(&finalizeRequest); err != nil {
-			t.Errorf("Decode() error = %v", err)
+			t.Errorf(testDecodeErrorFormat, err)
 			return
 		}
 		if err := json.NewEncoder(serverConn).Encode(bootstrapSessionFinalizeResponse{}); err != nil {
-			t.Errorf("Encode() error = %v", err)
+			t.Errorf(testEncodeErrorFormat, err)
 		}
 	}()
 
-	result, err := Complete("session-recover", "recovery-pass")
+	result, err := Complete(testRecoverySessionID, testRecoveryPassword)
 	if err != nil {
 		t.Fatalf("Complete() error = %v", err)
 	}
@@ -617,7 +574,7 @@ func TestValidateFinalizeRequestRejectsNodeAccountTakeover(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	originalAccountID, originalPrivateKey, originalBlobData, originalPubKeyData, originalAccountMetaData, err := buildAccountFixtures("2026-04-02T00:00:00Z")
+	originalAccountID, originalPrivateKey, originalBlobData, originalPubKeyData, originalAccountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
 		t.Fatalf("buildAccountFixtures() original error = %v", err)
 	}
@@ -628,10 +585,10 @@ func TestValidateFinalizeRequestRejectsNodeAccountTakeover(t *testing.T) {
 
 	readManagedFile = func(path string) ([]byte, error) {
 		switch path {
-		case filepath.Join("network", "peers", "joining-node.peer"):
+		case testPeerPath():
 			return []byte(`{}`), nil
-		case filepath.Join("network", "peers", "joining-node.meta"):
-			return buildSignedMetaFixture(t, originalPrivateKey, "joining-node", originalAccountID, "2026-04-02T00:00:00Z", 1), nil
+		case testMetaPath():
+			return buildSignedMetaFixture(t, originalPrivateKey, testJoiningNodeID, originalAccountID, testBootstrapTimestamp, 1), nil
 		case filepath.Join("network", "accounts", originalAccountID+pubkeyFileSuffix):
 			return originalPubKeyData, nil
 		case filepath.Join("network", "accounts", originalAccountID+metaFileSuffix):
@@ -645,10 +602,10 @@ func TestValidateFinalizeRequestRejectsNodeAccountTakeover(t *testing.T) {
 
 	request := bootstrapSessionFinalizeRequest{
 		Type:          "finalize",
-		NodeID:        "joining-node",
+		NodeID:        testJoiningNodeID,
 		AccountID:     newAccountID,
-		PeerData:      buildSignedPeerFixture(t, newPrivateKey, "162.191.52.239", 58103, newAccountID),
-		MetaData:      buildSignedMetaFixture(t, newPrivateKey, "joining-node", newAccountID, "2026-04-02T00:00:00Z", 2),
+		PeerData:      buildSignedPeerFixture(t, newPrivateKey, testBootstrapHost, 58103, newAccountID),
+		MetaData:      buildSignedMetaFixture(t, newPrivateKey, testJoiningNodeID, newAccountID, testBootstrapTimestamp, 2),
 		AccountBlob:   newBlobData,
 		AccountPubKey: newPubKeyData,
 		AccountMeta:   newAccountMetaData,
@@ -666,7 +623,7 @@ func buildAccountFixtures(createdAt string) (string, ed25519.PrivateKey, []byte,
 	}
 
 	accountID := accounts.AccountIDFromPublicKey(publicKey)
-	blobData, err := accounts.BuildBlob(accountID, publicKey, privateKey, "secret-pass")
+	blobData, err := accounts.BuildBlob(accountID, publicKey, privateKey, testAccountPassword)
 	if err != nil {
 		return "", nil, nil, nil, nil, err
 	}
@@ -697,6 +654,114 @@ func buildSignedPeerFixture(t *testing.T, privateKey ed25519.PrivateKey, ip stri
 		t.Fatalf("buildPeerFile() error = %v", err)
 	}
 	return data
+}
+
+func testPeerPath() string {
+	return filepath.Join("network", "peers", testJoiningPeerFile)
+}
+
+func testMetaPath() string {
+	return filepath.Join("network", "peers", testJoiningMetaFile)
+}
+
+func testAccountKeyPath() string {
+	return filepath.Join("local", "account", testAccountKeyFile)
+}
+
+func testAccountBlobPath() string {
+	return filepath.Join("network", "accounts", testAccountBlobFile)
+}
+
+func testAccountPubKeyPath() string {
+	return filepath.Join("network", "accounts", testAccountID+pubkeyFileSuffix)
+}
+
+func testAccountMetaPath() string {
+	return filepath.Join("network", "accounts", testAccountID+metaFileSuffix)
+}
+
+func testBootstrapMaterial(t *testing.T) accounts.Material {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	return accounts.Material{
+		AccountID:    testAccountID,
+		LocalKeyPath: testAccountKeyPath(),
+		PublicKey:    publicKey,
+		PrivateKey:   privateKey,
+		BlobData:     []byte(testAccountBlobJSON),
+	}
+}
+
+func respondToFinalizeRequest(t *testing.T, serverConn net.Conn) {
+	t.Helper()
+
+	var finalizeRequest bootstrapSessionFinalizeRequest
+	if err := json.NewDecoder(serverConn).Decode(&finalizeRequest); err != nil {
+		t.Errorf(testDecodeErrorFormat, err)
+		return
+	}
+	if finalizeRequest.NodeID != testJoiningNodeID {
+		t.Errorf("finalizeRequest.NodeID = %q, want %q", finalizeRequest.NodeID, testJoiningNodeID)
+	}
+	if finalizeRequest.AccountID != testAccountID {
+		t.Errorf("finalizeRequest.AccountID = %q, want %q", finalizeRequest.AccountID, testAccountID)
+	}
+	if len(finalizeRequest.AccountPubKey) == 0 {
+		t.Error("finalizeRequest.AccountPubKey = empty, want populated data")
+	}
+	if len(finalizeRequest.AccountMeta) == 0 {
+		t.Error("finalizeRequest.AccountMeta = empty, want populated data")
+	}
+	if err := json.NewEncoder(serverConn).Encode(bootstrapSessionFinalizeResponse{
+		PeerFile:        testPeerPath(),
+		MetaFile:        testMetaPath(),
+		AccountBlobFile: testAccountBlobPath(),
+	}); err != nil {
+		t.Errorf(testEncodeErrorFormat, err)
+	}
+}
+
+func assertCompleteResult(t *testing.T, result ConnectResult) {
+	t.Helper()
+
+	if !result.Connected {
+		t.Fatal("Complete() Connected = false, want true")
+	}
+	if result.PeerFile != testPeerPath() {
+		t.Fatalf("Complete() PeerFile = %q, want %q", result.PeerFile, testPeerPath())
+	}
+	if result.MetaFile != testMetaPath() {
+		t.Fatalf("Complete() MetaFile = %q, want %q", result.MetaFile, testMetaPath())
+	}
+	if result.AccountBlobFile != testAccountBlobPath() {
+		t.Fatalf("Complete() AccountBlobFile = %q, want %q", result.AccountBlobFile, testAccountBlobPath())
+	}
+	if result.LocalKeyFile != testAccountKeyPath() {
+		t.Fatalf("Complete() LocalKeyFile = %q, want %q", result.LocalKeyFile, testAccountKeyPath())
+	}
+}
+
+func assertBootstrapFilesWritten(t *testing.T, writtenFiles map[string][]byte) {
+	t.Helper()
+
+	requiredPaths := []string{
+		testPeerPath(),
+		testMetaPath(),
+		testAccountBlobPath(),
+		testAccountPubKeyPath(),
+		testAccountMetaPath(),
+	}
+
+	for _, path := range requiredPaths {
+		if _, ok := writtenFiles[path]; !ok {
+			t.Fatalf("missing written bootstrap file: %s", path)
+		}
+	}
 }
 
 func loadBootstrapListFixture(t *testing.T) []byte {
