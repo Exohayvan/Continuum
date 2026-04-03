@@ -12,6 +12,9 @@
     --muted: #aab4c8;
     --accent: #79d5ff;
     --accent-strong: #95ffd3;
+    --danger-bg: rgba(255, 122, 89, 0.18);
+    --danger-border: rgba(255, 122, 89, 0.34);
+    --danger-text: #fff1ea;
     --button: #22304b;
     --button-hover: #304162;
 }
@@ -410,8 +413,8 @@ button:disabled {
 }
 
 .bootstrap-latency.is-unreachable {
-    background: rgba(255, 122, 89, 0.14);
-    color: #ffd6c8;
+    background: var(--danger-bg);
+    color: var(--danger-text);
 }
 
 .bootstrap-form {
@@ -453,9 +456,9 @@ button:disabled {
     margin: 22px 0 0;
     padding: 13px 16px;
     border-radius: 16px;
-    background: rgba(255, 122, 89, 0.12);
-    border: 1px solid rgba(255, 122, 89, 0.28);
-    color: #ffd6c8;
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    color: var(--danger-text);
     white-space: pre-wrap;
     word-break: break-word;
 }
@@ -484,9 +487,9 @@ button:disabled {
     margin: 14px 0 0;
     padding: 12px 14px;
     border-radius: 14px;
-    background: rgba(255, 122, 89, 0.14);
-    border: 1px solid rgba(255, 122, 89, 0.32);
-    color: #ffd6c8;
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    color: var(--danger-text);
     font-size: 0.95rem;
     line-height: 1.55;
     white-space: pre-wrap;
