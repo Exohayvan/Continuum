@@ -33,6 +33,8 @@ const (
 	blobR           = 8
 	blobP           = 1
 	pubkeyFilePerm  = 0o644
+	errAccountID    = "account id is required"
+	errAccountPass  = "account password is required"
 )
 
 var (
@@ -179,12 +181,29 @@ func LocalKeyPath(accountID string) string {
 	return filepath.Join(localAccountDir, strings.TrimSpace(accountID)+keyFileSuffix)
 }
 
+func requiredAccountID(accountID string) (string, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return "", errors.New(errAccountID)
+	}
+
+	return accountID, nil
+}
+
+func validateAccountPassword(password string) error {
+	if strings.TrimSpace(password) == "" {
+		return errors.New(errAccountPass)
+	}
+
+	return nil
+}
+
 // SaveLocalKey persists the account private key in the managed local account
 // directory using the account id as the filename.
 func SaveLocalKey(accountID string, privateKey ed25519.PrivateKey) (string, error) {
-	accountID = strings.TrimSpace(accountID)
-	if accountID == "" {
-		return "", errors.New("account id is required")
+	accountID, err := requiredAccountID(accountID)
+	if err != nil {
+		return "", err
 	}
 
 	path := LocalKeyPath(accountID)
@@ -198,8 +217,8 @@ func SaveLocalKey(accountID string, privateKey ed25519.PrivateKey) (string, erro
 // Generate materializes a new account keypair, writes the local private key,
 // and builds the encrypted blob payload protected by the supplied password.
 func Generate(password string) (Material, error) {
-	if strings.TrimSpace(password) == "" {
-		return Material{}, errors.New("account password is required")
+	if err := validateAccountPassword(password); err != nil {
+		return Material{}, err
 	}
 
 	publicKey, privateKey, err := generateKeyPair(randomReader)
@@ -230,88 +249,32 @@ func Generate(password string) (Material, error) {
 // Recover decrypts the provided account blob with the supplied password and
 // stores the recovered private key locally under data/local/account/<accountID>.key.
 func Recover(blobData []byte, password string) (Material, error) {
-	if strings.TrimSpace(password) == "" {
-		return Material{}, errors.New("account password is required")
-	}
-
-	var blob Blob
-	if err := json.Unmarshal(blobData, &blob); err != nil {
+	if err := validateAccountPassword(password); err != nil {
 		return Material{}, err
 	}
 
-	publicKey, err := decodeFixedBase64(blob.PublicKey, ed25519.PublicKeySize)
+	blob, publicKey, err := ValidateBlob(blobData)
 	if err != nil {
 		return Material{}, err
 	}
 
-	unsigned := unsignedBlob{
-		AccountID:  blob.AccountID,
-		PublicKey:  blob.PublicKey,
-		KDF:        blob.KDF,
-		Salt:       blob.Salt,
-		Nonce:      blob.Nonce,
-		Ciphertext: blob.Ciphertext,
-	}
-	if err := verifySignature(ed25519.PublicKey(publicKey), unsigned, blob.Signature); err != nil {
-		return Material{}, err
-	}
-
-	accountID := AccountIDFromPublicKey(ed25519.PublicKey(publicKey))
-	if blob.AccountID != accountID {
-		return Material{}, errors.New("account blob account id does not match public key")
-	}
-	if blob.KDF != blobKDFName {
-		return Material{}, fmt.Errorf("unsupported account blob KDF: %s", blob.KDF)
-	}
-
-	salt, err := decodeFixedBase64(blob.Salt, blobSaltLength)
+	privateKey, err := decryptBlobPrivateKey(blob, password)
 	if err != nil {
 		return Material{}, err
 	}
-	nonce, err := decodeFixedBase64(blob.Nonce, blobNonceLength)
-	if err != nil {
-		return Material{}, err
-	}
-	ciphertext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(blob.Ciphertext))
-	if err != nil {
-		return Material{}, err
-	}
-
-	key, err := deriveBlobKey(password, salt)
-	if err != nil {
-		return Material{}, err
-	}
-	block, err := newAESCipher(key)
-	if err != nil {
-		return Material{}, err
-	}
-	gcm, err := newGCM(block)
-	if err != nil {
-		return Material{}, err
-	}
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return Material{}, ErrInvalidPassword
-	}
-
-	privateKey, err := decodePrivateKey(plaintext)
-	if err != nil {
-		return Material{}, err
-	}
-	if !privateKey.Public().(ed25519.PublicKey).Equal(ed25519.PublicKey(publicKey)) {
+	if !privateKey.Public().(ed25519.PublicKey).Equal(publicKey) {
 		return Material{}, errors.New("account blob private key does not match public key")
 	}
 
-	localKeyPath, err := SaveLocalKey(accountID, privateKey)
+	localKeyPath, err := SaveLocalKey(blob.AccountID, privateKey)
 	if err != nil {
 		return Material{}, err
 	}
 
 	return Material{
-		AccountID:    accountID,
+		AccountID:    blob.AccountID,
 		LocalKeyPath: localKeyPath,
-		PublicKey:    ed25519.PublicKey(publicKey),
+		PublicKey:    publicKey,
 		PrivateKey:   privateKey,
 		BlobData:     append([]byte(nil), blobData...),
 	}, nil
@@ -320,11 +283,12 @@ func Recover(blobData []byte, password string) (Material, error) {
 // BuildBlob encrypts the private key with the supplied password and returns the
 // canonical JSON payload stored as accountid.blob in the network data store.
 func BuildBlob(accountID string, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey, password string) ([]byte, error) {
-	if strings.TrimSpace(password) == "" {
-		return nil, errors.New("account password is required")
+	if err := validateAccountPassword(password); err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(accountID) == "" {
-		return nil, errors.New("account id is required")
+	accountID, err := requiredAccountID(accountID)
+	if err != nil {
+		return nil, err
 	}
 
 	salt := make([]byte, blobSaltLength)
@@ -393,9 +357,9 @@ func DecodePublicKeyFile(data []byte) (ed25519.PublicKey, error) {
 
 // BuildMeta constructs the signed accountID.meta payload.
 func BuildMeta(accountID string, publicKey ed25519.PublicKey, createdAt string, revision int, privateKey ed25519.PrivateKey) ([]byte, error) {
-	accountID = strings.TrimSpace(accountID)
-	if accountID == "" {
-		return nil, errors.New("account id is required")
+	accountID, err := requiredAccountID(accountID)
+	if err != nil {
+		return nil, err
 	}
 	if createdAt = strings.TrimSpace(createdAt); createdAt == "" {
 		createdAt = currentTime().UTC().Format(time.RFC3339)
@@ -505,6 +469,41 @@ func ValidateBlob(blobData []byte) (Blob, ed25519.PublicKey, error) {
 	}
 
 	return blob, ed25519.PublicKey(publicKey), nil
+}
+
+func decryptBlobPrivateKey(blob Blob, password string) (ed25519.PrivateKey, error) {
+	salt, err := decodeFixedBase64(blob.Salt, blobSaltLength)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := decodeFixedBase64(blob.Nonce, blobNonceLength)
+	if err != nil {
+		return nil, err
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(blob.Ciphertext))
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := deriveBlobKey(password, salt)
+	if err != nil {
+		return nil, err
+	}
+	block, err := newAESCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := newGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, ErrInvalidPassword
+	}
+
+	return decodePrivateKey(plaintext)
 }
 
 // PubkeyFilePerm returns the file mode used for persisted account public key
