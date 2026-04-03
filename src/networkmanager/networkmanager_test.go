@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+const (
+	readErrorFormat       = "Read() error = %v"
+	writeErrorFormat      = "Write() error = %v"
+	totalReadBytesFormat  = "Snapshot().TotalReadBytes = %d, want %d"
+	totalWriteBytesFormat = "Snapshot().TotalWriteBytes = %d, want %d"
+)
+
 func TestSnapshotReturnsZeroWhenNoTrafficRecorded(t *testing.T) {
 	resetNetworkManagerTestState(t)
 
@@ -36,7 +43,7 @@ func TestWrapReadWriterTracksReadAndWriteThroughput(t *testing.T) {
 	buffer := make([]byte, len(target.readData))
 	readCount, err := wrapped.Read(buffer)
 	if err != nil {
-		t.Fatalf("Read() error = %v", err)
+		t.Fatalf(readErrorFormat, err)
 	}
 	if readCount != len(target.readData) {
 		t.Fatalf("Read() = %d, want %d", readCount, len(target.readData))
@@ -44,7 +51,7 @@ func TestWrapReadWriterTracksReadAndWriteThroughput(t *testing.T) {
 
 	writeCount, err := wrapped.Write([]byte("uplink"))
 	if err != nil {
-		t.Fatalf("Write() error = %v", err)
+		t.Fatalf(writeErrorFormat, err)
 	}
 	if writeCount != len("uplink") {
 		t.Fatalf("Write() = %d, want %d", writeCount, len("uplink"))
@@ -52,10 +59,10 @@ func TestWrapReadWriterTracksReadAndWriteThroughput(t *testing.T) {
 
 	usage := Snapshot()
 	if usage.TotalReadBytes != uint64(len("peer")) {
-		t.Fatalf("Snapshot().TotalReadBytes = %d, want %d", usage.TotalReadBytes, len("peer"))
+		t.Fatalf(totalReadBytesFormat, usage.TotalReadBytes, len("peer"))
 	}
 	if usage.TotalWriteBytes != uint64(len("uplink")) {
-		t.Fatalf("Snapshot().TotalWriteBytes = %d, want %d", usage.TotalWriteBytes, len("uplink"))
+		t.Fatalf(totalWriteBytesFormat, usage.TotalWriteBytes, len("uplink"))
 	}
 	if usage.ReadMbps <= 0 {
 		t.Fatalf("Snapshot().ReadMbps = %f, want > 0", usage.ReadMbps)
@@ -101,7 +108,7 @@ func TestWrapReadWriteCloserTracksReadAndWrite(t *testing.T) {
 	buffer := make([]byte, len(target.readData))
 	readCount, err := wrapped.Read(buffer)
 	if err != nil {
-		t.Fatalf("Read() error = %v", err)
+		t.Fatalf(readErrorFormat, err)
 	}
 	if readCount != len(target.readData) {
 		t.Fatalf("Read() = %d, want %d", readCount, len(target.readData))
@@ -109,7 +116,7 @@ func TestWrapReadWriteCloserTracksReadAndWrite(t *testing.T) {
 
 	writeCount, err := wrapped.Write([]byte("uplink"))
 	if err != nil {
-		t.Fatalf("Write() error = %v", err)
+		t.Fatalf(writeErrorFormat, err)
 	}
 	if writeCount != len("uplink") {
 		t.Fatalf("Write() = %d, want %d", writeCount, len("uplink"))
@@ -117,10 +124,10 @@ func TestWrapReadWriteCloserTracksReadAndWrite(t *testing.T) {
 
 	usage := Snapshot()
 	if usage.TotalReadBytes != uint64(len("seed")) {
-		t.Fatalf("Snapshot().TotalReadBytes = %d, want %d", usage.TotalReadBytes, len("seed"))
+		t.Fatalf(totalReadBytesFormat, usage.TotalReadBytes, len("seed"))
 	}
 	if usage.TotalWriteBytes != uint64(len("uplink")) {
-		t.Fatalf("Snapshot().TotalWriteBytes = %d, want %d", usage.TotalWriteBytes, len("uplink"))
+		t.Fatalf(totalWriteBytesFormat, usage.TotalWriteBytes, len("uplink"))
 	}
 }
 
@@ -157,12 +164,12 @@ func TestWrapConnTracksTraffic(t *testing.T) {
 	}()
 
 	if _, err := right.Write([]byte("ping")); err != nil {
-		t.Fatalf("Write() error = %v", err)
+		t.Fatalf(writeErrorFormat, err)
 	}
 
 	reply := make([]byte, 4)
 	if _, err := right.Read(reply); err != nil {
-		t.Fatalf("Read() error = %v", err)
+		t.Fatalf(readErrorFormat, err)
 	}
 	if !bytes.Equal(reply, []byte("pong")) {
 		t.Fatalf("reply = %q, want %q", reply, "pong")
@@ -173,10 +180,10 @@ func TestWrapConnTracksTraffic(t *testing.T) {
 
 	usage := Snapshot()
 	if usage.TotalReadBytes != uint64(len("ping")) {
-		t.Fatalf("Snapshot().TotalReadBytes = %d, want %d", usage.TotalReadBytes, len("ping"))
+		t.Fatalf(totalReadBytesFormat, usage.TotalReadBytes, len("ping"))
 	}
 	if usage.TotalWriteBytes != uint64(len("pong")) {
-		t.Fatalf("Snapshot().TotalWriteBytes = %d, want %d", usage.TotalWriteBytes, len("pong"))
+		t.Fatalf(totalWriteBytesFormat, usage.TotalWriteBytes, len("pong"))
 	}
 }
 

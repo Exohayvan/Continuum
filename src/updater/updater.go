@@ -29,6 +29,8 @@ const (
 	AppName              = "Continuum"
 	DefaultCheckInterval = 5 * time.Minute
 	wrappedErrorFormat   = "%w: %s"
+	incomingSuffix       = ".incoming"
+	previousSuffix       = ".previous"
 )
 
 type Asset struct {
@@ -654,7 +656,7 @@ func appBundleRoot(executable string) (string, error) {
 }
 
 func replaceUnixBinary(currentPath, replacementPath string) (string, error) {
-	stagedPath := siblingTempPath(currentPath, ".incoming")
+	stagedPath := siblingTempPath(currentPath, incomingSuffix)
 	_ = removePath(stagedPath)
 
 	if err := copyFile(replacementPath, stagedPath); err != nil {
@@ -680,8 +682,8 @@ func replaceAppBundle(currentExecutablePath, replacementBundle string) (string, 
 	}
 
 	targetBundle := visibleAppBundlePath(currentBundle)
-	stagedBundle := bundleTempPath(targetBundle, ".incoming")
-	previousBundle := bundleTempPath(targetBundle, ".previous")
+	stagedBundle := bundleTempPath(targetBundle, incomingSuffix)
+	previousBundle := bundleTempPath(targetBundle, previousSuffix)
 	_ = removeAllPaths(stagedBundle)
 	_ = removeAllPaths(previousBundle)
 
@@ -723,8 +725,8 @@ func bundleTempPath(path, suffix string) string {
 func visibleAppBundlePath(path string) string {
 	dir := filepath.Dir(path)
 	base := strings.TrimPrefix(filepath.Base(path), ".")
-	base = strings.TrimSuffix(base, ".incoming")
-	base = strings.TrimSuffix(base, ".previous")
+	base = strings.TrimSuffix(base, incomingSuffix)
+	base = strings.TrimSuffix(base, previousSuffix)
 	return filepath.Join(dir, base)
 }
 
