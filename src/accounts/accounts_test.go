@@ -11,7 +11,14 @@ import (
 	"testing"
 )
 
-const testNodeID = "node-123"
+const (
+	testNodeID             = "node-123"
+	testPassword           = "secret-pass"
+	testSpacedAccountID    = " account-123 "
+	writePermFormat        = "writeKeyFile() perm = %#o, want %#o"
+	getOrCreateErrorFormat = "GetOrCreateKeys() error = %v, want %v"
+	generateKeyErrorFormat = "GenerateKey() error = %v"
+)
 
 func TestGetOrCreateKeysCreatesAndPersistsKeypair(t *testing.T) {
 	restore := stubAccountHooks(t)
@@ -28,7 +35,7 @@ func TestGetOrCreateKeysCreatesAndPersistsKeypair(t *testing.T) {
 	}
 	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
 		if perm != privateKeyPerm {
-			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+			t.Fatalf(writePermFormat, perm, privateKeyPerm)
 		}
 		storedFiles[path] = append([]byte(nil), data...)
 		return nil
@@ -86,7 +93,7 @@ func TestGetOrCreateKeysReturnsReadError(t *testing.T) {
 	}
 
 	if _, err := GetOrCreateKeys(); !errors.Is(err, wantErr) {
-		t.Fatalf("GetOrCreateKeys() error = %v, want %v", err, wantErr)
+		t.Fatalf(getOrCreateErrorFormat, err, wantErr)
 	}
 }
 
@@ -118,7 +125,7 @@ func TestGetOrCreateKeysReturnsGenerateError(t *testing.T) {
 	}
 
 	if _, err := GetOrCreateKeys(); !errors.Is(err, wantErr) {
-		t.Fatalf("GetOrCreateKeys() error = %v, want %v", err, wantErr)
+		t.Fatalf(getOrCreateErrorFormat, err, wantErr)
 	}
 }
 
@@ -137,7 +144,7 @@ func TestGetOrCreateKeysReturnsWriteError(t *testing.T) {
 	}
 
 	if _, err := GetOrCreateKeys(); !errors.Is(err, wantErr) {
-		t.Fatalf("GetOrCreateKeys() error = %v, want %v", err, wantErr)
+		t.Fatalf(getOrCreateErrorFormat, err, wantErr)
 	}
 }
 
@@ -148,13 +155,13 @@ func TestGenerateCreatesAccountMaterial(t *testing.T) {
 	storedFiles := map[string][]byte{}
 	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
 		if perm != privateKeyPerm {
-			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+			t.Fatalf(writePermFormat, perm, privateKeyPerm)
 		}
 		storedFiles[path] = append([]byte(nil), data...)
 		return nil
 	}
 
-	material, err := Generate("secret-pass")
+	material, err := Generate(testPassword)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -186,10 +193,10 @@ func TestRecoverRestoresAccountMaterial(t *testing.T) {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyErrorFormat, err)
 	}
 	accountID := AccountIDFromPublicKey(publicKey)
-	blobData, err := BuildBlob(accountID, publicKey, privateKey, "secret-pass")
+	blobData, err := BuildBlob(accountID, publicKey, privateKey, testPassword)
 	if err != nil {
 		t.Fatalf("BuildBlob() error = %v", err)
 	}
@@ -197,13 +204,13 @@ func TestRecoverRestoresAccountMaterial(t *testing.T) {
 	storedFiles := map[string][]byte{}
 	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
 		if perm != privateKeyPerm {
-			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+			t.Fatalf(writePermFormat, perm, privateKeyPerm)
 		}
 		storedFiles[path] = append([]byte(nil), data...)
 		return nil
 	}
 
-	material, err := Recover(blobData, "secret-pass")
+	material, err := Recover(blobData, testPassword)
 	if err != nil {
 		t.Fatalf("Recover() error = %v", err)
 	}
@@ -227,14 +234,14 @@ func TestSaveLocalKeyUsesDerivedPath(t *testing.T) {
 
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyErrorFormat, err)
 	}
 
 	calledPath := ""
 	writeKeyFile = func(path string, data []byte, perm os.FileMode) error {
 		calledPath = path
 		if perm != privateKeyPerm {
-			t.Fatalf("writeKeyFile() perm = %#o, want %#o", perm, privateKeyPerm)
+			t.Fatalf(writePermFormat, perm, privateKeyPerm)
 		}
 		if string(data) == "" {
 			t.Fatal("writeKeyFile() data = empty, want encoded private key")
@@ -242,7 +249,7 @@ func TestSaveLocalKeyUsesDerivedPath(t *testing.T) {
 		return nil
 	}
 
-	gotPath, err := SaveLocalKey(" account-123 ", privateKey)
+	gotPath, err := SaveLocalKey(testSpacedAccountID, privateKey)
 	if err != nil {
 		t.Fatalf("SaveLocalKey() error = %v", err)
 	}
@@ -253,8 +260,8 @@ func TestSaveLocalKeyUsesDerivedPath(t *testing.T) {
 	if calledPath != wantPath {
 		t.Fatalf("writeKeyFile() path = %q, want %q", calledPath, wantPath)
 	}
-	if LocalKeyPath(" account-123 ") != wantPath {
-		t.Fatalf("LocalKeyPath() = %q, want %q", LocalKeyPath(" account-123 "), wantPath)
+	if LocalKeyPath(testSpacedAccountID) != wantPath {
+		t.Fatalf("LocalKeyPath() = %q, want %q", LocalKeyPath(testSpacedAccountID), wantPath)
 	}
 	if PubkeyFilePerm() != pubkeyFilePerm {
 		t.Fatalf("PubkeyFilePerm() = %#o, want %#o", PubkeyFilePerm(), pubkeyFilePerm)
@@ -267,7 +274,7 @@ func TestBuildAndVerifyAccountTrustFiles(t *testing.T) {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyErrorFormat, err)
 	}
 	accountID := AccountIDFromPublicKey(publicKey)
 
@@ -299,9 +306,9 @@ func TestValidateBlobRejectsMismatchedAccountID(t *testing.T) {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyErrorFormat, err)
 	}
-	blobData, err := BuildBlob(AccountIDFromPublicKey(publicKey), publicKey, privateKey, "secret-pass")
+	blobData, err := BuildBlob(AccountIDFromPublicKey(publicKey), publicKey, privateKey, testPassword)
 	if err != nil {
 		t.Fatalf("BuildBlob() error = %v", err)
 	}
