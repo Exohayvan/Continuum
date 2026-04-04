@@ -60,6 +60,10 @@ let pendingBootstrapSessionID = "";
 let pendingBootstrapRecovery = false;
 let pendingBootstrapLabel = "";
 
+function hasPendingBootstrapSession() {
+    return pendingBootstrapSessionID.trim() !== "";
+}
+
 function formatVersion(value) {
     if (!value) {
         return "unknown";
@@ -406,11 +410,17 @@ function applyBootstrapState(bootstrapState) {
         return;
     }
 
+    const preservingBootstrapPhase = hasPendingBootstrapSession();
+
     showBootstrapScreen();
-    showConnectPhase();
+    if (!preservingBootstrapPhase) {
+        showConnectPhase();
+    }
     renderBootstrapNodes(bootstrapState.nodes);
 
-    if (Number(bootstrapState.peerCount || 0) > 0) {
+    if (preservingBootstrapPhase) {
+        bootstrapMetaElement.textContent = `Held bootstrap session open with ${pendingBootstrapLabel || "selected endpoint"}.`;
+    } else if (Number(bootstrapState.peerCount || 0) > 0) {
         bootstrapMetaElement.textContent = `${bootstrapState.peerCount} peer file(s) already exist locally.`;
     } else if (Array.isArray(bootstrapState.nodes) && bootstrapState.nodes.length > 0) {
         bootstrapMetaElement.textContent = `${bootstrapState.nodes.length} bootstrap node(s), sorted from lowest to highest latency.`;
@@ -421,11 +431,15 @@ function applyBootstrapState(bootstrapState) {
     if (bootstrapState.error) {
         bootstrapErrorElement.textContent = bootstrapState.error;
         bootstrapErrorElement.classList.remove("hidden");
-        statusElement.textContent = "Bootstrap required";
+        if (!preservingBootstrapPhase) {
+            statusElement.textContent = "Bootstrap required";
+        }
     } else {
         bootstrapErrorElement.textContent = "";
         bootstrapErrorElement.classList.add("hidden");
-        statusElement.textContent = "Bootstrap required";
+        if (!preservingBootstrapPhase) {
+            statusElement.textContent = "Bootstrap required";
+        }
     }
 
     if (bootstrapCustomPortElement?.value === "") {
