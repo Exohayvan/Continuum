@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	testNodeID        = "node-123"
-	testVersion       = "1.5.0"
-	testRemoteVersion = "v1.6.0"
-	testUpdateError   = "download failed"
-	testBootstrapHost = "162.191.52.239"
-	testSessionID     = "session-123"
-	testPassword      = "super-secret"
+	testNodeID          = "node-123"
+	testVersion         = "1.5.0"
+	testRemoteVersion   = "v1.6.0"
+	testUpdateError     = "download failed"
+	testBootstrapHost   = "162.191.52.239"
+	testSessionID       = "session-123"
+	testPassword        = "super-secret"
 	startupObserverText = "Startup() did not register updater status observer"
 )
 
@@ -339,6 +339,75 @@ func TestCompleteBootstrapReturnsResolvedValue(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("CompleteBootstrap() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRecoverBootstrapAccountReturnsResolvedValue(t *testing.T) {
+	originalRecoverBootstrap := recoverBootstrap
+	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: "account-123"}
+	recoverBootstrap = func(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
+		if sessionID != testSessionID || password != testPassword {
+			t.Fatalf("recoverBootstrap() args = (%q, %q), want (%q, %q)", sessionID, password, testSessionID, testPassword)
+		}
+		return want, nil
+	}
+	t.Cleanup(func() {
+		recoverBootstrap = originalRecoverBootstrap
+	})
+
+	app := NewApp()
+	got, err := app.RecoverBootstrapAccount(testSessionID, testPassword)
+	if err != nil {
+		t.Fatalf("RecoverBootstrapAccount() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RecoverBootstrapAccount() = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoginBootstrapAccountReturnsResolvedValue(t *testing.T) {
+	originalLoginBootstrap := loginBootstrap
+	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: "account-123"}
+	loginBootstrap = func(sessionID, username, password string) (bootstrapmanager.ConnectResult, error) {
+		if sessionID != testSessionID || username != "alice" || password != testPassword {
+			t.Fatalf("loginBootstrap() args = (%q, %q, %q), want (%q, %q, %q)", sessionID, username, password, testSessionID, "alice", testPassword)
+		}
+		return want, nil
+	}
+	t.Cleanup(func() {
+		loginBootstrap = originalLoginBootstrap
+	})
+
+	app := NewApp()
+	got, err := app.LoginBootstrapAccount(testSessionID, "alice", testPassword)
+	if err != nil {
+		t.Fatalf("LoginBootstrapAccount() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("LoginBootstrapAccount() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRegisterBootstrapAccountReturnsResolvedValue(t *testing.T) {
+	originalRegisterBootstrap := registerBootstrap
+	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: "account-123"}
+	registerBootstrap = func(sessionID, username, password string) (bootstrapmanager.ConnectResult, error) {
+		if sessionID != testSessionID || username != "alice" || password != testPassword {
+			t.Fatalf("registerBootstrap() args = (%q, %q, %q), want (%q, %q, %q)", sessionID, username, password, testSessionID, "alice", testPassword)
+		}
+		return want, nil
+	}
+	t.Cleanup(func() {
+		registerBootstrap = originalRegisterBootstrap
+	})
+
+	app := NewApp()
+	got, err := app.RegisterBootstrapAccount(testSessionID, "alice", testPassword)
+	if err != nil {
+		t.Fatalf("RegisterBootstrapAccount() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RegisterBootstrapAccount() = %#v, want %#v", got, want)
 	}
 }
 

@@ -9,9 +9,24 @@ const bootstrapSelectionElement = document.getElementById("bootstrap-selection")
 const bootstrapCustomHostElement = document.getElementById("bootstrap-custom-host");
 const bootstrapCustomPortElement = document.getElementById("bootstrap-custom-port");
 const bootstrapCustomConnectButton = document.getElementById("bootstrap-custom-connect");
-const bootstrapPasswordMetaElement = document.getElementById("bootstrap-password-meta");
-const bootstrapPasswordElement = document.getElementById("bootstrap-password");
-const bootstrapPasswordSubmitButton = document.getElementById("bootstrap-password-submit");
+const bootstrapConnectPhaseElement = document.getElementById("bootstrap-connect-phase");
+const accountPhaseElement = document.getElementById("account-phase");
+const accountPhaseMetaElement = document.getElementById("account-phase-meta");
+const accountModeChoiceElement = document.getElementById("account-mode-choice");
+const accountModeLoginButton = document.getElementById("account-mode-login");
+const accountModeRegisterButton = document.getElementById("account-mode-register");
+const accountRecoveryElement = document.getElementById("account-recovery");
+const accountRecoveryPasswordElement = document.getElementById("account-recovery-password");
+const accountRecoverySubmitButton = document.getElementById("account-recovery-submit");
+const accountLoginElement = document.getElementById("account-login");
+const accountLoginUsernameElement = document.getElementById("account-login-username");
+const accountLoginPasswordElement = document.getElementById("account-login-password");
+const accountLoginSubmitButton = document.getElementById("account-login-submit");
+const accountRegisterElement = document.getElementById("account-register");
+const accountRegisterUsernameElement = document.getElementById("account-register-username");
+const accountRegisterPasswordElement = document.getElementById("account-register-password");
+const accountRegisterSubmitButton = document.getElementById("account-register-submit");
+const accountPhaseBackButton = document.getElementById("account-phase-back");
 const updateDialogElement = document.getElementById("update-dialog");
 const updateMessageElement = document.getElementById("update-message");
 const updateErrorElement = document.getElementById("update-error");
@@ -41,9 +56,9 @@ let dashboardEventUnsubscribers = [];
 let bootstrapRequired = false;
 let selectedBootstrapKey = "";
 let connectingBootstrap = false;
-let awaitingBootstrapPassword = false;
 let pendingBootstrapSessionID = "";
 let pendingBootstrapRecovery = false;
+let pendingBootstrapLabel = "";
 
 function formatVersion(value) {
     if (!value) {
@@ -144,6 +159,16 @@ function showBootstrapScreen() {
     bootstrapScreenElement.classList.remove("hidden");
 }
 
+function showConnectPhase() {
+    bootstrapConnectPhaseElement?.classList.remove("hidden");
+    accountPhaseElement?.classList.add("hidden");
+}
+
+function showAccountPhase() {
+    bootstrapConnectPhaseElement?.classList.add("hidden");
+    accountPhaseElement?.classList.remove("hidden");
+}
+
 function hideBootstrapScreen() {
     bootstrapRequired = false;
     bootstrapScreenElement.classList.add("hidden");
@@ -152,20 +177,15 @@ function hideBootstrapScreen() {
     selectedBootstrapKey = "";
     pendingBootstrapSessionID = "";
     pendingBootstrapRecovery = false;
-    awaitingBootstrapPassword = false;
-    if (bootstrapPasswordElement) {
-        bootstrapPasswordElement.value = "";
-        bootstrapPasswordElement.disabled = false;
-    }
-    if (bootstrapPasswordSubmitButton) {
-        bootstrapPasswordSubmitButton.disabled = false;
-        bootstrapPasswordSubmitButton.textContent = "Continue Bootstrap";
-    }
-    if (bootstrapPasswordMetaElement) {
-        bootstrapPasswordMetaElement.textContent = "Choose a bootstrap node first.";
-    }
+    pendingBootstrapLabel = "";
     bootstrapSelectionElement.textContent = "No bootstrap node selected yet.";
     bootstrapSelectionElement.classList.add("is-placeholder");
+    accountRecoveryPasswordElement.value = "";
+    accountLoginUsernameElement.value = "";
+    accountLoginPasswordElement.value = "";
+    accountRegisterUsernameElement.value = "";
+    accountRegisterPasswordElement.value = "";
+    showConnectPhase();
 }
 
 function bootstrapNodeKey(node) {
@@ -179,18 +199,11 @@ function bootstrapNodeKey(node) {
 function selectBootstrapNode(node) {
     selectedBootstrapKey = bootstrapNodeKey(node);
 
-    if (bootstrapCustomHostElement) {
-        bootstrapCustomHostElement.value = node.host || "";
-    }
-    if (bootstrapCustomPortElement) {
-        bootstrapCustomPortElement.value = node.port ? String(node.port) : "";
-    }
-
     const selectedName = node.name || "bootstrap node";
     const selectedEndpoint = node.endpoint || `${node.host}:${node.port}`;
     bootstrapSelectionElement.textContent = `Selected ${selectedName} at ${selectedEndpoint}.`;
     bootstrapSelectionElement.classList.remove("is-placeholder");
-    statusElement.textContent = "Bootstrap node selected";
+    statusElement.textContent = "Connecting bootstrap node";
 }
 
 function setBootstrapError(message) {
@@ -207,27 +220,25 @@ function setBootstrapError(message) {
 function applyBootstrapConnectPrompt(result, label) {
     pendingBootstrapSessionID = result.sessionId || "";
     pendingBootstrapRecovery = Boolean(result.recoveryAvailable);
-    awaitingBootstrapPassword = Boolean(result.awaitingPassword);
-
-    if (bootstrapPasswordMetaElement) {
-        bootstrapPasswordMetaElement.textContent = pendingBootstrapRecovery
-            ? `Recovered account ${result.accountId || "unknown"} is available from ${label}. Enter its password to unlock the local signing key.`
-            : `No account exists for this NodeID on ${label}. Enter a password to create and encrypt a new account blob.`;
-    }
-    if (bootstrapPasswordElement) {
-        bootstrapPasswordElement.value = "";
-        bootstrapPasswordElement.disabled = false;
-        bootstrapPasswordElement.focus();
-    }
-    if (bootstrapPasswordSubmitButton) {
-        bootstrapPasswordSubmitButton.disabled = false;
-        bootstrapPasswordSubmitButton.textContent = pendingBootstrapRecovery ? "Recover Account" : "Create Account";
-    }
+    pendingBootstrapLabel = label;
 
     bootstrapSelectionElement.textContent = result.message || `Password required to continue with ${label}.`;
     bootstrapSelectionElement.classList.remove("is-placeholder");
     bootstrapMetaElement.textContent = `Held bootstrap session open with ${label}.`;
-    statusElement.textContent = pendingBootstrapRecovery ? "Account recovery available" : "Bootstrap password required";
+    accountPhaseMetaElement.textContent = pendingBootstrapRecovery
+        ? `This node is already linked to account ${result.accountId || "unknown"}. Enter its password to recover access.`
+        : `No account is currently linked to this node on ${label}. Log in to an existing username or register a new one.`;
+    accountRecoveryPasswordElement.value = "";
+    accountLoginUsernameElement.value = "";
+    accountLoginPasswordElement.value = "";
+    accountRegisterUsernameElement.value = "";
+    accountRegisterPasswordElement.value = "";
+    accountRecoveryElement.classList.toggle("hidden", !pendingBootstrapRecovery);
+    accountModeChoiceElement.classList.toggle("hidden", pendingBootstrapRecovery);
+    accountLoginElement.classList.add("hidden");
+    accountRegisterElement.classList.add("hidden");
+    showAccountPhase();
+    statusElement.textContent = pendingBootstrapRecovery ? "Recover existing node account" : "Choose account action";
 }
 
 async function connectBootstrapEndpoint(host, port, nodeID, label) {
@@ -261,15 +272,30 @@ async function connectBootstrapEndpoint(host, port, nodeID, label) {
     }
 }
 
-async function completeBootstrapSession() {
+async function runAccountCompletion(mode) {
     if (!pendingBootstrapSessionID) {
-        setBootstrapError("Start a bootstrap session before entering a password.");
+        setBootstrapError("Start a bootstrap session before entering account credentials.");
         return;
     }
 
-    const password = bootstrapPasswordElement?.value ?? "";
+    let username = "";
+    let password = "";
+    if (mode === "recover") {
+        password = accountRecoveryPasswordElement.value;
+    } else if (mode === "login") {
+        username = accountLoginUsernameElement.value;
+        password = accountLoginPasswordElement.value;
+    } else {
+        username = accountRegisterUsernameElement.value;
+        password = accountRegisterPasswordElement.value;
+    }
+
     if (password.trim() === "") {
-        setBootstrapError("A bootstrap password is required.");
+        setBootstrapError("A password is required.");
+        return;
+    }
+    if (mode !== "recover" && username.trim() === "") {
+        setBootstrapError("A username is required.");
         return;
     }
     if (connectingBootstrap) {
@@ -278,40 +304,42 @@ async function completeBootstrapSession() {
 
     connectingBootstrap = true;
     setBootstrapError("");
-    statusElement.textContent = pendingBootstrapRecovery ? "Recovering account..." : "Creating account...";
-    bootstrapMetaElement.textContent = pendingBootstrapRecovery
-        ? "Decrypting recovered account blob and finalizing bootstrap..."
-        : "Generating account material and finalizing bootstrap...";
+    statusElement.textContent = mode === "recover" ? "Recovering account..." : `${mode === "login" ? "Logging in" : "Registering"} account...`;
+    bootstrapMetaElement.textContent = `Finalizing bootstrap session with ${pendingBootstrapLabel || "selected endpoint"}...`;
     bootstrapRefreshButton.disabled = true;
     bootstrapCustomConnectButton.disabled = true;
-    bootstrapPasswordSubmitButton.disabled = true;
-    bootstrapPasswordElement.disabled = true;
+    accountRecoverySubmitButton.disabled = true;
+    accountLoginSubmitButton.disabled = true;
+    accountRegisterSubmitButton.disabled = true;
 
     try {
-        const result = await appBridge.CompleteBootstrap(pendingBootstrapSessionID, password);
+        let result;
+        if (mode === "recover") {
+            result = await appBridge.RecoverBootstrapAccount(pendingBootstrapSessionID, password);
+        } else if (mode === "login") {
+            result = await appBridge.LoginBootstrapAccount(pendingBootstrapSessionID, username, password);
+        } else {
+            result = await appBridge.RegisterBootstrapAccount(pendingBootstrapSessionID, username, password);
+        }
         pendingBootstrapSessionID = "";
         pendingBootstrapRecovery = false;
-        awaitingBootstrapPassword = false;
-        bootstrapPasswordElement.value = "";
-        bootstrapPasswordMetaElement.textContent = "Choose a bootstrap node first.";
-        bootstrapPasswordSubmitButton.textContent = "Continue Bootstrap";
         bootstrapSelectionElement.textContent = result.message || "Bootstrap completed.";
         bootstrapSelectionElement.classList.remove("is-placeholder");
         statusElement.textContent = result.reachable ? "Bootstrap completed" : "Bootstrap completed (degraded)";
+        showConnectPhase();
         await loadShellState();
     } catch (error) {
         setBootstrapError(String(error));
         statusElement.textContent = "Bootstrap completion failed";
-        bootstrapMetaElement.textContent = pendingBootstrapRecovery
-            ? "Unable to recover the account. Check the password and try again."
-            : "Unable to create the account. Check the password and try again.";
+        bootstrapMetaElement.textContent = "Unable to finalize account phase. Check credentials and try again.";
         console.error(error);
     } finally {
         connectingBootstrap = false;
         bootstrapRefreshButton.disabled = false;
         bootstrapCustomConnectButton.disabled = false;
-        bootstrapPasswordSubmitButton.disabled = false;
-        bootstrapPasswordElement.disabled = false;
+        accountRecoverySubmitButton.disabled = false;
+        accountLoginSubmitButton.disabled = false;
+        accountRegisterSubmitButton.disabled = false;
     }
 }
 
@@ -379,6 +407,7 @@ function applyBootstrapState(bootstrapState) {
     }
 
     showBootstrapScreen();
+    showConnectPhase();
     renderBootstrapNodes(bootstrapState.nodes);
 
     if (Number(bootstrapState.peerCount || 0) > 0) {
@@ -401,9 +430,6 @@ function applyBootstrapState(bootstrapState) {
 
     if (bootstrapCustomPortElement?.value === "") {
         bootstrapCustomPortElement.value = "58103";
-    }
-    if (!awaitingBootstrapPassword && bootstrapPasswordMetaElement) {
-        bootstrapPasswordMetaElement.textContent = "Choose a bootstrap node first.";
     }
 }
 
@@ -758,18 +784,28 @@ bootstrapCustomConnectButton.addEventListener("click", () => {
     const port = Number.parseInt(bootstrapCustomPortElement.value.trim(), 10);
     void connectBootstrapEndpoint(host, port, "", host || "custom bootstrap");
 });
-
-bootstrapPasswordSubmitButton.addEventListener("click", () => {
-    void completeBootstrapSession();
+accountModeLoginButton.addEventListener("click", () => {
+    accountLoginElement.classList.remove("hidden");
+    accountRegisterElement.classList.add("hidden");
+    accountLoginUsernameElement.focus();
 });
-
-bootstrapPasswordElement.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") {
-        return;
-    }
-
-    event.preventDefault();
-    void completeBootstrapSession();
+accountModeRegisterButton.addEventListener("click", () => {
+    accountRegisterElement.classList.remove("hidden");
+    accountLoginElement.classList.add("hidden");
+    accountRegisterUsernameElement.focus();
+});
+accountRecoverySubmitButton.addEventListener("click", () => {
+    void runAccountCompletion("recover");
+});
+accountLoginSubmitButton.addEventListener("click", () => {
+    void runAccountCompletion("login");
+});
+accountRegisterSubmitButton.addEventListener("click", () => {
+    void runAccountCompletion("register");
+});
+accountPhaseBackButton.addEventListener("click", () => {
+    showConnectPhase();
+    statusElement.textContent = "Select a bootstrap endpoint";
 });
 updateDialogElement.addEventListener("cancel", (event) => {
     event.preventDefault();

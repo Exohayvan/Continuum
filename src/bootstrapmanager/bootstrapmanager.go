@@ -36,6 +36,7 @@ const (
 	DefaultPort            = 58103
 	bootstrapSessionTTL    = 2 * time.Minute
 	bootstrapSessionIDSize = 16
+	usernameRegistryPath   = "network/accounts/usernames.json"
 )
 
 type Node struct {
@@ -182,6 +183,8 @@ var (
 	listenBootstrap   = listenBootstrapEndpoint
 	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords   = loadExistingNodeRecords
+	loadUsernameIndex = loadUsernameRegistry
+	saveUsernameIndex = saveUsernameRegistry
 	currentTime       = time.Now
 	scheduleAfter     = time.AfterFunc
 	signPeerOrMeta    = signPayload
@@ -496,6 +499,104 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 		return ConnectResult{}, err
 	}
 
+	return finalizeCompletion(sessionID, session, material)
+}
+
+func Recover(sessionID, password string) (ConnectResult, error) {
+	return Complete(sessionID, password)
+}
+
+func Register(sessionID, username, password string) (ConnectResult, error) {
+	if err := validateCompletionInputs(sessionID, password); err != nil {
+		return ConnectResult{}, err
+	}
+
+	normalizedUsername, err := normalizeUsername(username)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	session, err := pendingSessionForCompletion(sessionID)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	material, err := createAccount(password)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	registry, err := loadUsernameIndex()
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	if existingAccountID, exists := registry[normalizedUsername]; exists && existingAccountID != material.AccountID {
+		return ConnectResult{}, errors.New("username already exists")
+	}
+	registry[normalizedUsername] = material.AccountID
+
+	result, err := finalizeCompletion(sessionID, session, material)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	if err := saveUsernameIndex(registry); err != nil {
+		return ConnectResult{}, err
+	}
+	result.Message = fmt.Sprintf("Registered %s with account %s. %s", normalizedUsername, material.AccountID, result.Message)
+	return result, nil
+}
+
+func Login(sessionID, username, password string) (ConnectResult, error) {
+	if err := validateCompletionInputs(sessionID, password); err != nil {
+		return ConnectResult{}, err
+	}
+
+	normalizedUsername, err := normalizeUsername(username)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	session, err := pendingSessionForCompletion(sessionID)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	registry, err := loadUsernameIndex()
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	accountID, exists := registry[normalizedUsername]
+	if !exists || strings.TrimSpace(accountID) == "" {
+		return ConnectResult{}, errors.New("username does not exist")
+	}
+
+	blobData, err := readManagedFile(accountBlobRelativePath(accountID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ConnectResult{}, errors.New("account blob for username was not found locally")
+		}
+		return ConnectResult{}, err
+	}
+
+	material, err := recoverAccount(blobData, password)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	if material.AccountID != accountID {
+		return ConnectResult{}, errors.New("username account mapping does not match recovered account")
+	}
+
+	result, err := finalizeCompletion(sessionID, session, material)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	result.Message = fmt.Sprintf("Logged in as %s (%s). %s", normalizedUsername, material.AccountID, result.Message)
+	return result, nil
+}
+
+func finalizeCompletion(sessionID string, session *pendingSession, material accounts.Material) (ConnectResult, error) {
 	artifacts, err := buildCompletionArtifacts(session, material)
 	if err != nil {
 		return ConnectResult{}, err
@@ -519,6 +620,46 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 	}
 
 	return completedConnectResult(session, material, peerPath, metaPath, accountBlobPath), nil
+}
+
+func normalizeUsername(username string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(username))
+	if normalized == "" {
+		return "", errors.New("username is required")
+	}
+
+	return normalized, nil
+}
+
+func loadUsernameRegistry() (map[string]string, error) {
+	data, err := readManagedFile(usernameRegistryPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]string{}, nil
+		}
+
+		return nil, err
+	}
+
+	registry := map[string]string{}
+	if err := json.Unmarshal(data, &registry); err != nil {
+		return nil, err
+	}
+
+	return registry, nil
+}
+
+func saveUsernameRegistry(registry map[string]string) error {
+	if registry == nil {
+		registry = map[string]string{}
+	}
+
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return writeManagedFile(usernameRegistryPath, data, 0o644)
 }
 
 type completionArtifacts struct {

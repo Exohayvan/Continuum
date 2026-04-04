@@ -1500,6 +1500,128 @@ func TestCompleteReturnsFinalizeError(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsDuplicateUsername(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	session := &pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID}
+	storePendingSession(session)
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	loadUsernameIndex = func() (map[string]string, error) {
+		return map[string]string{"alice": "account-existing"}, nil
+	}
+	createAccount = func(string) (accounts.Material, error) {
+		return accounts.Material{AccountID: "account-new"}, nil
+	}
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Register() error = nil, want duplicate username error")
+	}
+}
+
+func TestRegisterSavesUsernameIndexAfterFinalize(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	createAccount = func(string) (accounts.Material, error) { return material, nil }
+	loadUsernameIndex = func() (map[string]string, error) {
+		return map[string]string{}, nil
+	}
+	saved := map[string]string{}
+	saveUsernameIndex = func(registry map[string]string) error {
+		for key, value := range registry {
+			saved[key] = value
+		}
+		return nil
+	}
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   clientConn,
+		nodeID: testJoiningNodeID,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testBootstrapHost,
+			Port:         58103,
+			Reachable:    true,
+		},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	go respondToFinalizeRequest(t, serverConn)
+
+	result, err := Register(testSessionID, "alice", testAccountPassword)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if got := saved["alice"]; got != material.AccountID {
+		t.Fatalf("saved username index account = %q, want %q", got, material.AccountID)
+	}
+	if !strings.Contains(result.Message, "Registered alice") {
+		t.Fatalf("Register() message = %q, want username confirmation", result.Message)
+	}
+}
+
+func TestLoginUsesUsernameIndexAndBlob(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	loadUsernameIndex = func() (map[string]string, error) {
+		return map[string]string{"alice": material.AccountID}, nil
+	}
+	recoverAccount = func(blobData []byte, password string) (accounts.Material, error) {
+		if string(blobData) != `{"blob":"data"}` || password != testAccountPassword {
+			t.Fatalf("recoverAccount() args mismatch")
+		}
+		return material, nil
+	}
+	readManagedFile = func(path string) ([]byte, error) {
+		if path == accountBlobRelativePath(material.AccountID) {
+			return []byte(`{"blob":"data"}`), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	storePendingSession(&pendingSession{
+		id:       testSessionID,
+		conn:     clientConn,
+		nodeID:   testJoiningNodeID,
+		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	go respondToFinalizeRequest(t, serverConn)
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+}
+
+func TestNormalizeUsername(t *testing.T) {
+	if _, err := normalizeUsername(" "); err == nil {
+		t.Fatal("normalizeUsername() error = nil, want required failure")
+	}
+	username, err := normalizeUsername("  Alice ")
+	if err != nil {
+		t.Fatalf("normalizeUsername() error = %v", err)
+	}
+	if username != "alice" {
+		t.Fatalf("normalizeUsername() = %q, want %q", username, "alice")
+	}
+}
+
 func TestValidateCompletionInputsRejectsMissingSessionID(t *testing.T) {
 	if err := validateCompletionInputs("", testAccountPassword); err == nil {
 		t.Fatal("validateCompletionInputs() error = nil, want session id failure")
@@ -3010,6 +3132,8 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalListenBootstrap := listenBootstrap
 	originalWrapBootstrapConn := wrapBootstrapConn
 	originalLoadNodeRecords := loadNodeRecords
+	originalLoadUsernameIndex := loadUsernameIndex
+	originalSaveUsernameIndex := saveUsernameIndex
 	originalCurrentTime := currentTime
 	originalScheduleAfter := scheduleAfter
 	originalSignPeerOrMeta := signPeerOrMeta
@@ -3031,6 +3155,8 @@ func stubBootstrapHooks(t *testing.T) func() {
 	listenBootstrap = listenBootstrapEndpoint
 	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords = loadExistingNodeRecords
+	loadUsernameIndex = loadUsernameRegistry
+	saveUsernameIndex = saveUsernameRegistry
 	currentTime = time.Now
 	scheduleAfter = time.AfterFunc
 	signPeerOrMeta = signPayload
@@ -3054,6 +3180,8 @@ func stubBootstrapHooks(t *testing.T) func() {
 		listenBootstrap = originalListenBootstrap
 		wrapBootstrapConn = originalWrapBootstrapConn
 		loadNodeRecords = originalLoadNodeRecords
+		loadUsernameIndex = originalLoadUsernameIndex
+		saveUsernameIndex = originalSaveUsernameIndex
 		currentTime = originalCurrentTime
 		scheduleAfter = originalScheduleAfter
 		signPeerOrMeta = originalSignPeerOrMeta

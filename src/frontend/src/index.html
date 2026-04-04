@@ -29,7 +29,7 @@
             </p>
         </div>
 
-        <div class="bootstrap-grid">
+        <div class="bootstrap-grid" id="bootstrap-connect-phase">
             <section class="bootstrap-panel">
                 <div class="bootstrap-panel-header">
                     <div>
@@ -64,23 +64,56 @@
                 <p class="bootstrap-selection is-placeholder" id="bootstrap-selection">No bootstrap node selected yet.</p>
             </section>
 
-            <section class="bootstrap-panel bootstrap-panel--password">
-                <div class="bootstrap-panel-header">
-                    <h3>Account Password</h3>
-                    <p class="bootstrap-meta" id="bootstrap-password-meta">Choose a bootstrap node first.</p>
-                </div>
-
-                <div class="bootstrap-form">
-                    <label class="bootstrap-label" for="bootstrap-password">Password</label>
-                    <input class="bootstrap-input" id="bootstrap-password" placeholder="Enter password" type="password"/>
-                    <button id="bootstrap-password-submit" type="button">Continue Bootstrap</button>
-                </div>
-
-                <p class="bootstrap-note">
-                    Existing accounts use this password to unlock the recovered account blob. New accounts use it to encrypt the new blob before it is seeded.
-                </p>
-            </section>
         </div>
+
+        <section class="bootstrap-panel account-phase hidden" id="account-phase">
+            <div class="bootstrap-panel-header">
+                <h3>Account Phase</h3>
+                <p class="bootstrap-meta" id="account-phase-meta">Complete account access after selecting a bootstrap endpoint.</p>
+            </div>
+
+            <section class="account-recovery hidden" id="account-recovery">
+                <div class="bootstrap-panel-header">
+                    <h3>Recover Node-Linked Account</h3>
+                    <p class="bootstrap-meta">This node already has an associated account. Enter the password to recover access.</p>
+                </div>
+                <div class="bootstrap-form">
+                    <label class="bootstrap-label" for="account-recovery-password">Password</label>
+                    <input class="bootstrap-input" id="account-recovery-password" placeholder="Enter password" type="password"/>
+                    <button id="account-recovery-submit" type="button">Recover & Finalize</button>
+                </div>
+            </section>
+
+            <section class="account-mode-choice hidden" id="account-mode-choice">
+                <div class="account-actions">
+                    <button class="button-secondary" id="account-mode-login" type="button">Log In</button>
+                    <button id="account-mode-register" type="button">Register</button>
+                </div>
+
+                <div class="bootstrap-form hidden" id="account-login">
+                    <label class="bootstrap-label" for="account-login-username">Username</label>
+                    <input class="bootstrap-input" id="account-login-username" placeholder="existing-username" type="text"/>
+                    <label class="bootstrap-label" for="account-login-password">Password</label>
+                    <input class="bootstrap-input" id="account-login-password" placeholder="Password" type="password"/>
+                    <button id="account-login-submit" type="button">Log In & Finalize</button>
+                </div>
+
+                <div class="bootstrap-form hidden" id="account-register">
+                    <label class="bootstrap-label" for="account-register-username">Username</label>
+                    <input class="bootstrap-input" id="account-register-username" placeholder="new-username" type="text"/>
+                    <label class="bootstrap-label" for="account-register-password">Password</label>
+                    <input class="bootstrap-input" id="account-register-password" placeholder="Password" type="password"/>
+                    <button id="account-register-submit" type="button">Register & Finalize</button>
+                </div>
+            </section>
+
+            <div class="account-actions">
+                <button class="button-secondary" id="account-phase-back" type="button">Back to Bootstrap Selection</button>
+            </div>
+            <p class="bootstrap-note">
+                Usernames are unique account labels. Registration derives a distinct AccountID from the generated keypair.
+            </p>
+        </section>
 
         <output class="bootstrap-error hidden" id="bootstrap-error" aria-live="polite"></output>
     </div>

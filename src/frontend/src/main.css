@@ -324,6 +324,22 @@ button:disabled {
         rgba(7, 11, 19, 0.88);
 }
 
+.account-phase {
+    margin-top: 20px;
+}
+
+.account-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+}
+
+.account-recovery,
+.account-mode-choice {
+    margin-top: 10px;
+}
+
 .bootstrap-panel-header h3 {
     margin: 0;
     font-size: 1.28rem;
