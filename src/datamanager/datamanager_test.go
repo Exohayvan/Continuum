@@ -11,8 +11,11 @@ import (
 
 const (
 	testManagedFile          = "network/stats/usage.txt"
+	testStatsUsageFile       = "stats/usage.json"
 	testFileData             = "continuum"
 	testAppBundle            = "Continuum.app"
+	missingExecutableText    = "missing executable"
+	snapshotWantErrorFormat  = "Snapshot() error = %v, want %v"
 	writeFileErrorFormat     = "WriteFile() error = %v"
 	writeFileWantErrorFormat = "WriteFile() error = %v, want %v"
 )
@@ -93,7 +96,7 @@ func TestEnsureLayoutCreatesManagedDirectoriesNextToAppBundle(t *testing.T) {
 func TestEnsureLayoutReturnsExecutableError(t *testing.T) {
 	resetDataManagerTestState(t)
 
-	wantErr := errors.New("missing executable")
+	wantErr := errors.New(missingExecutableText)
 	currentExecutable = func() (string, error) {
 		return "", wantErr
 	}
@@ -208,21 +211,21 @@ func TestSnapshotReturnsDirectorySizeError(t *testing.T) {
 
 	_, err := Snapshot()
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
+		t.Fatalf(snapshotWantErrorFormat, err, wantErr)
 	}
 }
 
 func TestSnapshotReturnsDataRootError(t *testing.T) {
 	resetDataManagerTestState(t)
 
-	wantErr := errors.New("missing executable")
+	wantErr := errors.New(missingExecutableText)
 	currentExecutable = func() (string, error) {
 		return "", wantErr
 	}
 
 	_, err := Snapshot()
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
+		t.Fatalf(snapshotWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -276,7 +279,7 @@ func TestSnapshotReturnsManagedDataSizeError(t *testing.T) {
 
 	_, err := Snapshot()
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
+		t.Fatalf(snapshotWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -284,14 +287,14 @@ func TestSnapshotReturnsExecutableError(t *testing.T) {
 	resetDataManagerTestState(t)
 
 	managerState.setDataPath(t.TempDir())
-	wantErr := errors.New("missing executable")
+	wantErr := errors.New(missingExecutableText)
 	currentExecutable = func() (string, error) {
 		return "", wantErr
 	}
 
 	_, err := Snapshot()
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
+		t.Fatalf(snapshotWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -324,12 +327,12 @@ func TestReadFileReturnsUnderlyingError(t *testing.T) {
 func TestManagedPathReturnsDataRootError(t *testing.T) {
 	resetDataManagerTestState(t)
 
-	wantErr := errors.New("missing executable")
+	wantErr := errors.New(missingExecutableText)
 	currentExecutable = func() (string, error) {
 		return "", wantErr
 	}
 
-	_, err := managedPath("stats/usage.json")
+	_, err := managedPath(testStatsUsageFile)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("managedPath() error = %v, want %v", err, wantErr)
 	}
@@ -355,7 +358,7 @@ func TestWriteFileReturnsCreateDirectoryError(t *testing.T) {
 		return wantErr
 	}
 
-	err := WriteFile("stats/usage.json", []byte("test"), 0o644)
+	err := WriteFile(testStatsUsageFile, []byte("test"), 0o644)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf(writeFileWantErrorFormat, err, wantErr)
 	}
@@ -371,7 +374,7 @@ func TestWriteFileReturnsUnderlyingError(t *testing.T) {
 		return wantErr
 	}
 
-	err := WriteFile("stats/usage.json", []byte("test"), 0o644)
+	err := WriteFile(testStatsUsageFile, []byte("test"), 0o644)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf(writeFileWantErrorFormat, err, wantErr)
 	}

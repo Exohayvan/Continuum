@@ -20,6 +20,7 @@ const (
 	testBootstrapHost = "162.191.52.239"
 	testSessionID     = "session-123"
 	testPassword      = "super-secret"
+	startupObserverText = "Startup() did not register updater status observer"
 )
 
 func TestNewAppReturnsEmptyBackend(t *testing.T) {
@@ -67,7 +68,7 @@ func TestStartupAcceptsContext(t *testing.T) {
 		t.Fatal("Startup() did not wire quit handler with the provided context")
 	}
 	if observed == nil {
-		t.Fatal("Startup() did not register updater status observer")
+		t.Fatal(startupObserverText)
 	}
 	if !startedUpdater {
 		t.Fatal("Startup() did not start updater background loop")
@@ -117,7 +118,7 @@ func TestStartupEmitsUpdaterStatusEvents(t *testing.T) {
 	app.Startup(ctx)
 
 	if observed == nil {
-		t.Fatal("Startup() did not register updater status observer")
+		t.Fatal(startupObserverText)
 	}
 
 	want := updater.Status{
@@ -167,7 +168,7 @@ func TestStartupSkipsUpdaterStatusEventsWithoutContext(t *testing.T) {
 	app.Startup(nil)
 
 	if observed == nil {
-		t.Fatal("Startup() did not register updater status observer")
+		t.Fatal(startupObserverText)
 	}
 
 	observed(updater.Status{
