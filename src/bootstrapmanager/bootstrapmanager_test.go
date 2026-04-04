@@ -49,6 +49,7 @@ const (
 	testBuildAccountFixturesOtherErrorFormat = "buildAccountFixtures() other error = %v"
 	testConnectErrorFormat                   = "Connect() error = %v"
 	testConnectWantErrorFormat               = "Connect() error = %v, want %v"
+	testCompleteWantErrorFormat              = "Complete() error = %v, want %s"
 	testGenerateKeyErrorFormat               = "GenerateKey() error = %v"
 	testDefaultListenPortFormat              = "defaultListenPort() = %d, want %d"
 	testLoadExistingNodeRecordsErrorFormat   = "loadExistingNodeRecords() error = %v"
@@ -1390,7 +1391,7 @@ func TestCompleteReturnsBuildArtifactsError(t *testing.T) {
 	})
 
 	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testSignFailedText {
-		t.Fatalf("Complete() error = %v, want %s", err, testSignFailedText)
+		t.Fatalf(testCompleteWantErrorFormat, err, testSignFailedText)
 	}
 }
 
@@ -1421,7 +1422,7 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 	})
 
 	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testWriteFailedText {
-		t.Fatalf("Complete() error = %v, want %s", err, testWriteFailedText)
+		t.Fatalf(testCompleteWantErrorFormat, err, testWriteFailedText)
 	}
 }
 
@@ -1450,7 +1451,7 @@ func TestCompleteReturnsFinalizeError(t *testing.T) {
 	})
 
 	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testFinalizeFailedText {
-		t.Fatalf("Complete() error = %v, want %s", err, testFinalizeFailedText)
+		t.Fatalf(testCompleteWantErrorFormat, err, testFinalizeFailedText)
 	}
 }
 
