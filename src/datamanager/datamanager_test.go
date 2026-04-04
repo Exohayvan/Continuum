@@ -10,9 +10,21 @@ import (
 )
 
 const (
-	testManagedFile = "network/stats/usage.txt"
-	testFileData    = "continuum"
+	testManagedFile          = "network/stats/usage.txt"
+	testFileData             = "continuum"
+	testAppBundle            = "Continuum.app"
+	writeFileErrorFormat     = "WriteFile() error = %v"
+	writeFileWantErrorFormat = "WriteFile() error = %v, want %v"
+	applicationsDir          = "/Applications"
 )
+
+func applicationsBundleBinaryPath() string {
+	return filepath.Join(applicationsDir, testAppBundle, "Contents", "MacOS", "Continuum")
+}
+
+func applicationsBundlePath() string {
+	return filepath.Join(applicationsDir, testAppBundle)
+}
 
 func TestEnsureLayoutCreatesManagedDirectoriesNextToExecutable(t *testing.T) {
 	resetDataManagerTestState(t)
@@ -54,7 +66,7 @@ func TestEnsureLayoutCreatesManagedDirectoriesNextToAppBundle(t *testing.T) {
 	resetDataManagerTestState(t)
 
 	root := t.TempDir()
-	executablePath := filepath.Join(root, "Continuum.app", "Contents", "MacOS", "Continuum")
+	executablePath := filepath.Join(root, testAppBundle, "Contents", "MacOS", "Continuum")
 	currentExecutable = func() (string, error) {
 		return executablePath, nil
 	}
@@ -70,7 +82,7 @@ func TestEnsureLayoutCreatesManagedDirectoriesNextToAppBundle(t *testing.T) {
 		t.Fatalf("EnsureLayout() = %q, want %q", dataPath, wantDataPath)
 	}
 
-	if _, err := os.Stat(filepath.Join(root, "Continuum.app", "data")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, testAppBundle, "data")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("data directory was created inside app bundle: %v", err)
 	}
 }
@@ -114,7 +126,7 @@ func TestSnapshotReportsManagedUsageAndThroughput(t *testing.T) {
 	appPath := filepath.Join(root, "Continuum")
 	dataPath := filepath.Join(root, "data")
 	if err := os.WriteFile(appPath, []byte("binary"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	if err := os.MkdirAll(filepath.Join(dataPath, "network", "stats"), directoryMode); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -138,7 +150,7 @@ func TestSnapshotReportsManagedUsageAndThroughput(t *testing.T) {
 	}
 
 	if err := WriteFile(testManagedFile, []byte(testFileData), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 
 	if _, err := ReadFile(testManagedFile); err != nil {
@@ -203,7 +215,7 @@ func TestSnapshotReturnsFilesystemError(t *testing.T) {
 	root := t.TempDir()
 	appPath := filepath.Join(root, "Continuum")
 	if err := os.WriteFile(appPath, []byte("binary"), 0o755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(writeFileErrorFormat, err)
 	}
 	currentExecutable = func() (string, error) {
 		return appPath, nil
@@ -268,7 +280,7 @@ func TestWriteFileReturnsManagedPathError(t *testing.T) {
 
 	err := WriteFile("../outside", []byte("bad"), 0o644)
 	if !errors.Is(err, errPathEscapesDataRoot) {
-		t.Fatalf("WriteFile() error = %v, want %v", err, errPathEscapesDataRoot)
+		t.Fatalf(writeFileWantErrorFormat, err, errPathEscapesDataRoot)
 	}
 }
 
@@ -283,7 +295,7 @@ func TestWriteFileReturnsCreateDirectoryError(t *testing.T) {
 
 	err := WriteFile("stats/usage.json", []byte("test"), 0o644)
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("WriteFile() error = %v, want %v", err, wantErr)
+		t.Fatalf(writeFileWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -299,7 +311,7 @@ func TestWriteFileReturnsUnderlyingError(t *testing.T) {
 
 	err := WriteFile("stats/usage.json", []byte("test"), 0o644)
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("WriteFile() error = %v, want %v", err, wantErr)
+		t.Fatalf(writeFileWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -338,8 +350,8 @@ func TestAppDirectoryUsesExecutableParent(t *testing.T) {
 }
 
 func TestAppDirectoryUsesBundleParent(t *testing.T) {
-	got := appDirectory(filepath.Join("/Applications", "Continuum.app", "Contents", "MacOS", "Continuum"))
-	want := "/Applications"
+	got := appDirectory(applicationsBundleBinaryPath())
+	want := applicationsDir
 	if got != want {
 		t.Fatalf("appDirectory() = %q, want %q", got, want)
 	}
@@ -354,8 +366,8 @@ func TestInstallPathUsesExecutablePathOutsideBundle(t *testing.T) {
 }
 
 func TestInstallPathUsesBundleRoot(t *testing.T) {
-	got := installPath(filepath.Join("/Applications", "Continuum.app", "Contents", "MacOS", "Continuum"))
-	want := filepath.Join("/Applications", "Continuum.app")
+	got := installPath(applicationsBundleBinaryPath())
+	want := applicationsBundlePath()
 	if got != want {
 		t.Fatalf("installPath() = %q, want %q", got, want)
 	}
