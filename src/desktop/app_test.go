@@ -136,6 +136,51 @@ func TestStartupEmitsUpdaterStatusEvents(t *testing.T) {
 	}
 }
 
+func TestStartupSkipsUpdaterStatusEventsWithoutContext(t *testing.T) {
+	originalObserveUpdateStatus := observeUpdateStatus
+	originalStartUpdaterLoop := startUpdaterLoop
+	originalStartBootstrapServer := startBootstrapServer
+	originalEmitRuntimeEvent := emitRuntimeEvent
+	var observed func(updater.Status)
+	emitted := false
+
+	observeUpdateStatus = func(fn func(updater.Status)) {
+		observed = fn
+	}
+	startUpdaterLoop = func() {
+		// Intentionally no-op for this nil-context event wiring test.
+	}
+	startBootstrapServer = func() {
+		// Intentionally no-op for this nil-context event wiring test.
+	}
+	emitRuntimeEvent = func(context.Context, string, ...interface{}) {
+		emitted = true
+	}
+	t.Cleanup(func() {
+		observeUpdateStatus = originalObserveUpdateStatus
+		startUpdaterLoop = originalStartUpdaterLoop
+		startBootstrapServer = originalStartBootstrapServer
+		emitRuntimeEvent = originalEmitRuntimeEvent
+	})
+
+	app := NewApp()
+	app.Startup(nil)
+
+	if observed == nil {
+		t.Fatal("Startup() did not register updater status observer")
+	}
+
+	observed(updater.Status{
+		CurrentVersion: testVersion,
+		RemoteVersion:  testRemoteVersion,
+		UpdateRequired: true,
+	})
+
+	if emitted {
+		t.Fatal("Startup() emitted updater status with nil context")
+	}
+}
+
 func TestQuitApplicationUsesWailsRuntimeWhenContextExists(t *testing.T) {
 	originalRuntimeQuit := runtimeQuit
 	originalExitProcess := exitProcess
