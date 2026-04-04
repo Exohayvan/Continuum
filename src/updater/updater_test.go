@@ -52,13 +52,16 @@ const (
 	readFileErrorFormat            = "ReadFile() error = %v"
 	writeTarGzErrorFormat          = "writeTarGz() error = %v"
 	writeFileErrorFormat           = "WriteFile() error = %v"
+	writeHeaderErrorFormat         = "WriteHeader() error = %v"
 	closeErrorFormat               = "Close() error = %v"
 	tmpContinuumDir                = "/tmp/continuum"
 	mkdirAllErrorFormat            = "MkdirAll() error = %v"
+	mkdirFailedText                = "mkdir failed"
 	tmpContinuumBinary             = "/tmp/Continuum"
 	renameFailedError              = "rename failed"
 	windowsBinaryName              = "Continuum.exe"
 	processMismatchFormat          = "process = %q, want %q"
+	dirMismatchFormat              = "Dir = %q, want %q"
 	checkStatusCurrentFormat       = "checkStatus().CurrentVersion = %q, want %q"
 	checkStatusRemoteFormat        = "checkStatus().RemoteVersion = %q, want %q"
 	checkStatusErrorFormat         = "checkStatus().UpdateError = %q, want %q"
@@ -66,7 +69,21 @@ const (
 	checkStatusUpdateRequiredFalse = "checkStatus().UpdateRequired = true, want false"
 	unavailableRemote              = "unavailable"
 	updateFailureText              = "update failed"
+	ensureBundleReadyErrorFormat   = "EnsureBundleReadyOnStartup() error = %v"
+	xattrBinaryPath                = "/usr/bin/xattr"
+	applicationsDir                = "/Applications"
+	startFailedText                = "start failed"
+	openBinaryPath                 = "/usr/bin/open"
+	resolveUpdateAssetErrorFormat  = "resolveUpdateAsset() error = %v"
 )
+
+func applicationsAppBundlePath() string {
+	return filepath.Join(applicationsDir, AppName+".app")
+}
+
+func applicationsAppBinaryPath() string {
+	return filepath.Join(applicationsAppBundlePath(), "Contents", "MacOS", AppName)
+}
 
 func TestBuildAssetName(t *testing.T) {
 	t.Parallel()
@@ -376,7 +393,7 @@ func TestDownloadReleaseAssetCreateDirsError(t *testing.T) {
 	defer server.Close()
 
 	createDirs = func(string, os.FileMode) error {
-		return errors.New("mkdir failed")
+		return errors.New(mkdirFailedText)
 	}
 
 	err := downloadReleaseAsset(context.Background(), server.Client(), server.URL, filepath.Join(t.TempDir(), assetArchiveName))
@@ -470,10 +487,10 @@ func TestExtractTarGzDirectoryEntry(t *testing.T) {
 	tarWriter := tar.NewWriter(gzipWriter)
 
 	if err := tarWriter.WriteHeader(&tar.Header{Name: "nested", Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
-		t.Fatalf("WriteHeader() error = %v", err)
+		t.Fatalf(writeHeaderErrorFormat, err)
 	}
 	if err := tarWriter.WriteHeader(&tar.Header{Name: "nested/Continuum", Mode: 0o755, Size: 3}); err != nil {
-		t.Fatalf("WriteHeader() error = %v", err)
+		t.Fatalf(writeHeaderErrorFormat, err)
 	}
 	if _, err := tarWriter.Write([]byte("bin")); err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -525,7 +542,7 @@ func TestWriteTarFileCreateDirsError(t *testing.T) {
 	defer restore()
 
 	createDirs = func(string, os.FileMode) error {
-		return errors.New("mkdir failed")
+		return errors.New(mkdirFailedText)
 	}
 
 	err := writeTarFile(tar.NewReader(strings.NewReader("")), filepath.Join(t.TempDir(), "nested", "Continuum"), 0o755)
@@ -549,7 +566,7 @@ func TestWriteTarFileCopyError(t *testing.T) {
 	var archive bytes.Buffer
 	tarWriter := tar.NewWriter(&archive)
 	if err := tarWriter.WriteHeader(&tar.Header{Name: AppName, Mode: 0o755, Size: 5}); err != nil {
-		t.Fatalf("WriteHeader() error = %v", err)
+		t.Fatalf(writeHeaderErrorFormat, err)
 	}
 	if _, err := archive.WriteString("abc"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
@@ -627,13 +644,13 @@ func TestFindPathByNameRootError(t *testing.T) {
 func TestAppBundleRoot(t *testing.T) {
 	t.Parallel()
 
-	got, err := appBundleRoot("/Applications/Continuum.app/Contents/MacOS/Continuum")
+	got, err := appBundleRoot(applicationsAppBinaryPath())
 	if err != nil {
 		t.Fatalf("appBundleRoot() error = %v", err)
 	}
 
-	if got != "/Applications/Continuum.app" {
-		t.Fatalf("appBundleRoot() = %q, want %q", got, "/Applications/Continuum.app")
+	if got != applicationsAppBundlePath() {
+		t.Fatalf("appBundleRoot() = %q, want %q", got, applicationsAppBundlePath())
 	}
 }
 
@@ -945,7 +962,7 @@ func TestReplaceAppBundleQuarantineClearFailureRestoresPreviousBundle(t *testing
 
 	hostGOOS = "darwin"
 	lookPath = func(string) (string, error) {
-		return "/usr/bin/xattr", nil
+		return xattrBinaryPath, nil
 	}
 	runCommandOutput = func(string, ...string) ([]byte, error) {
 		return []byte("operation not permitted"), fmt.Errorf("exit status 1")
@@ -994,7 +1011,7 @@ func TestEnsureBundleReadyOnStartupNoOpOutsideDarwin(t *testing.T) {
 	}
 
 	if err := EnsureBundleReadyOnStartup(); err != nil {
-		t.Fatalf("EnsureBundleReadyOnStartup() error = %v", err)
+		t.Fatalf(ensureBundleReadyErrorFormat, err)
 	}
 }
 
@@ -1004,23 +1021,23 @@ func TestEnsureBundleReadyOnStartupClearsCurrentBundleQuarantine(t *testing.T) {
 
 	hostGOOS = "darwin"
 	currentExecutable = func() (string, error) {
-		return filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName), nil
+		return applicationsAppBinaryPath(), nil
 	}
 	lookPath = func(name string) (string, error) {
 		if name != "xattr" {
 			t.Fatalf("lookPath() name = %q, want %q", name, "xattr")
 		}
-		return "/usr/bin/xattr", nil
+		return xattrBinaryPath, nil
 	}
 
 	called := false
 	runCommandOutput = func(name string, args ...string) ([]byte, error) {
 		called = true
-		if name != "/usr/bin/xattr" {
-			t.Fatalf("runCommandOutput() name = %q, want %q", name, "/usr/bin/xattr")
+		if name != xattrBinaryPath {
+			t.Fatalf("runCommandOutput() name = %q, want %q", name, xattrBinaryPath)
 		}
 
-		wantArgs := []string{"-dr", "com.apple.quarantine", filepath.Join("/Applications", AppName+".app")}
+		wantArgs := []string{"-dr", "com.apple.quarantine", applicationsAppBundlePath()}
 		if len(args) != len(wantArgs) {
 			t.Fatalf("len(runCommandOutput() args) = %d, want %d", len(args), len(wantArgs))
 		}
@@ -1034,7 +1051,7 @@ func TestEnsureBundleReadyOnStartupClearsCurrentBundleQuarantine(t *testing.T) {
 	}
 
 	if err := EnsureBundleReadyOnStartup(); err != nil {
-		t.Fatalf("EnsureBundleReadyOnStartup() error = %v", err)
+		t.Fatalf(ensureBundleReadyErrorFormat, err)
 	}
 
 	if !called {
@@ -1056,7 +1073,7 @@ func TestEnsureBundleReadyOnStartupNoOpOutsideAppBundle(t *testing.T) {
 	}
 
 	if err := EnsureBundleReadyOnStartup(); err != nil {
-		t.Fatalf("EnsureBundleReadyOnStartup() error = %v", err)
+		t.Fatalf(ensureBundleReadyErrorFormat, err)
 	}
 }
 
@@ -1082,7 +1099,7 @@ func TestCopyFileCreateDirsError(t *testing.T) {
 	}
 
 	createDirs = func(string, os.FileMode) error {
-		return fmt.Errorf("mkdir failed")
+		return fmt.Errorf(mkdirFailedText)
 	}
 
 	if err := copyFile(source, filepath.Join(root, "dest", AppName)); err == nil {
@@ -1167,7 +1184,7 @@ func TestCopyTreeCreateDirsError(t *testing.T) {
 	}
 
 	createDirs = func(string, os.FileMode) error {
-		return fmt.Errorf("mkdir failed")
+		return fmt.Errorf(mkdirFailedText)
 	}
 
 	if err := copyTree(sourceRoot, filepath.Join(root, "dest")); err == nil {
@@ -1246,7 +1263,7 @@ func TestScheduleWindowsReplacement(t *testing.T) {
 			t.Fatalf("argv = %v, want cmd /C <script>", argv)
 		}
 		if attr == nil || attr.Dir != filepath.Dir(current) {
-			t.Fatalf("Dir = %q, want %q", attr.Dir, filepath.Dir(current))
+			t.Fatalf(dirMismatchFormat, attr.Dir, filepath.Dir(current))
 		}
 
 		return os.FindProcess(os.Getpid())
@@ -1280,7 +1297,7 @@ func TestScheduleWindowsReplacementStartError(t *testing.T) {
 	defer restore()
 
 	startOSProcess = func(string, []string, *os.ProcAttr) (*os.Process, error) {
-		return nil, fmt.Errorf("start failed")
+		return nil, fmt.Errorf(startFailedText)
 	}
 
 	if err := scheduleWindowsReplacement(`C:\Apps\`+windowsBinaryName, `C:\Temp\`+windowsBinaryName); err == nil {
@@ -1299,7 +1316,7 @@ func TestRelaunchBinary(t *testing.T) {
 			t.Fatalf(processMismatchFormat, name, tmpContinuumBinary)
 		}
 		if attr == nil || attr.Dir != "/tmp" {
-			t.Fatalf("Dir = %q, want %q", attr.Dir, "/tmp")
+			t.Fatalf(dirMismatchFormat, attr.Dir, "/tmp")
 		}
 
 		return os.FindProcess(os.Getpid())
@@ -1320,7 +1337,7 @@ func TestRelaunchBinaryError(t *testing.T) {
 	defer restore()
 
 	startOSProcess = func(string, []string, *os.ProcAttr) (*os.Process, error) {
-		return nil, fmt.Errorf("start failed")
+		return nil, fmt.Errorf(startFailedText)
 	}
 
 	if err := relaunchBinary(tmpContinuumBinary); err == nil {
@@ -1332,25 +1349,25 @@ func TestRelaunchBinaryUsesOpenForAppBundle(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
 
-	appBinary := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
+	appBinary := applicationsAppBinaryPath()
 	called := false
 	lookPath = func(file string) (string, error) {
 		if file != "open" {
 			t.Fatalf("lookPath() file = %q, want %q", file, "open")
 		}
-		return "/usr/bin/open", nil
+		return openBinaryPath, nil
 	}
 	startOSProcess = func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 		called = true
 
-		if name != "/usr/bin/open" {
-			t.Fatalf(processMismatchFormat, name, "/usr/bin/open")
+		if name != openBinaryPath {
+			t.Fatalf(processMismatchFormat, name, openBinaryPath)
 		}
-		if len(argv) != 3 || argv[0] != "open" || argv[1] != "-n" || argv[2] != filepath.Join("/Applications", AppName+".app") {
-			t.Fatalf("argv = %q, want open -n %q", argv, filepath.Join("/Applications", AppName+".app"))
+		if len(argv) != 3 || argv[0] != "open" || argv[1] != "-n" || argv[2] != applicationsAppBundlePath() {
+			t.Fatalf("argv = %q, want open -n %q", argv, applicationsAppBundlePath())
 		}
-		if attr == nil || attr.Dir != "/Applications" {
-			t.Fatalf("Dir = %q, want %q", attr.Dir, "/Applications")
+		if attr == nil || attr.Dir != applicationsDir {
+			t.Fatalf(dirMismatchFormat, attr.Dir, applicationsDir)
 		}
 
 		return os.FindProcess(os.Getpid())
@@ -1369,7 +1386,7 @@ func TestRelaunchBinaryOpenLookupError(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
 
-	appBinary := filepath.Join("/Applications", AppName+".app", "Contents", "MacOS", AppName)
+	appBinary := applicationsAppBinaryPath()
 	lookPath = func(string) (string, error) {
 		return "", fmt.Errorf("lookup failed")
 	}
@@ -1592,7 +1609,7 @@ func TestCheckAndApplyWrapperStoresUpdateError(t *testing.T) {
 	if err == nil {
 		t.Fatal("CheckAndApply() error = nil, want fetch failure")
 	}
-	if got := cachedUpdateError(); got == "" {
+	if cachedUpdateError() == "" {
 		t.Fatal("cachedUpdateError() = empty string, want stored failure")
 	}
 }
@@ -1817,7 +1834,7 @@ func TestResolveUpdateAssetNoStableRelease(t *testing.T) {
 
 	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 5, Patch: 0}, "linux", "amd64")
 	if err != nil {
-		t.Fatalf("resolveUpdateAsset() error = %v", err)
+		t.Fatalf(resolveUpdateAssetErrorFormat, err)
 	}
 	if assetName != "" || assetURL != "" || shouldUpdate {
 		t.Fatalf("resolveUpdateAsset() = (%q, %q, %t), want empty no-update result", assetName, assetURL, shouldUpdate)
@@ -1838,7 +1855,7 @@ func TestResolveUpdateAssetNoUpdateWhenCurrentMatchesLatest(t *testing.T) {
 
 	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 6, Patch: 0}, "linux", "amd64")
 	if err != nil {
-		t.Fatalf("resolveUpdateAsset() error = %v", err)
+		t.Fatalf(resolveUpdateAssetErrorFormat, err)
 	}
 	if assetName != "" || assetURL != "" || shouldUpdate {
 		t.Fatalf("resolveUpdateAsset() = (%q, %q, %t), want empty no-update result", assetName, assetURL, shouldUpdate)
@@ -1863,7 +1880,7 @@ func TestResolveUpdateAssetDarwinAcceptsMacOSAssetName(t *testing.T) {
 
 	assetName, assetURL, shouldUpdate, err := resolveUpdateAsset(context.Background(), version.Value{Major: 1, Minor: 5, Patch: 0}, "darwin", "arm64")
 	if err != nil {
-		t.Fatalf("resolveUpdateAsset() error = %v", err)
+		t.Fatalf(resolveUpdateAssetErrorFormat, err)
 	}
 	if !shouldUpdate {
 		t.Fatal("resolveUpdateAsset() shouldUpdate = false, want true")
@@ -1993,7 +2010,7 @@ func TestCheckAndApplyCreateExtractDirError(t *testing.T) {
 	downloadAsset = func(context.Context, *http.Client, string, string) error { return nil }
 	createDirs = func(path string, mode os.FileMode) error {
 		if path == filepath.Join(workDir, "extract") {
-			return fmt.Errorf("mkdir failed")
+			return fmt.Errorf(mkdirFailedText)
 		}
 		return os.MkdirAll(path, mode)
 	}
@@ -2236,7 +2253,7 @@ func TestApplyExtractedUpdateWindowsScheduleError(t *testing.T) {
 
 	currentExecutable = func() (string, error) { return current, nil }
 	startOSProcess = func(string, []string, *os.ProcAttr) (*os.Process, error) {
-		return nil, fmt.Errorf("start failed")
+		return nil, fmt.Errorf(startFailedText)
 	}
 
 	if _, _, err := applyExtractedUpdate("windows", filepath.Join(root, "extract")); err == nil {
