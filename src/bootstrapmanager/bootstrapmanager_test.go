@@ -22,6 +22,7 @@ import (
 
 	"continuum/src/accounts"
 	"continuum/src/datamanager"
+	"continuum/src/networkmanager"
 	"continuum/src/nodeid"
 )
 
@@ -689,6 +690,49 @@ func TestConnectUsesLoopbackForLocalBootstrapNode(t *testing.T) {
 	}
 	if dialedHost != testLoopbackHost {
 		t.Fatalf("Connect() dialed host = %q, want %q", dialedHost, testLoopbackHost)
+	}
+
+	removePendingSession(result.SessionID)
+}
+
+func TestConnectWrapsTrackedBootstrapConnection(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testJoiningNodeID }
+	serverConn, clientConn := net.Pipe()
+	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+		return clientConn, nil
+	}
+
+	var wrappedConn net.Conn
+	wrapBootstrapConn = func(conn net.Conn) net.Conn {
+		wrappedConn = conn
+		return conn
+	}
+
+	go func() {
+		defer serverConn.Close()
+		var request bootstrapSessionStartRequest
+		if err := json.NewDecoder(serverConn).Decode(&request); err != nil {
+			t.Errorf(testDecodeErrorFormat, err)
+			return
+		}
+		if err := json.NewEncoder(serverConn).Encode(bootstrapSessionStartResponse{
+			ObservedIPv4: testBootstrapHost,
+			Port:         58103,
+			Reachable:    true,
+		}); err != nil {
+			t.Errorf(testEncodeErrorFormat, err)
+		}
+	}()
+
+	result, err := Connect(testBootstrapHost, 58103, "")
+	if err != nil {
+		t.Fatalf(testConnectErrorFormat, err)
+	}
+	if wrappedConn == nil {
+		t.Fatal("Connect() did not wrap the bootstrap connection")
 	}
 
 	removePendingSession(result.SessionID)
@@ -2707,6 +2751,56 @@ func TestStartBootstrapServiceLaunchesConnectionHandler(t *testing.T) {
 	}
 }
 
+func TestStartBootstrapServiceWrapsAcceptedConnection(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testBootstrapNodeID }
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return loadBootstrapListFixture(t), nil
+	}
+
+	serverConn, clientConn := net.Pipe()
+	listenBootstrap = func(int) (net.Listener, error) {
+		return &scriptedListener{
+			conns: []net.Conn{connWithRemoteAddr{
+				Conn:       serverConn,
+				remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
+			}},
+			acceptErr: errors.New("stop"),
+		}, nil
+	}
+
+	wrapped := make(chan net.Conn, 1)
+	wrapBootstrapConn = func(conn net.Conn) net.Conn {
+		wrapped <- conn
+		return conn
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- startBootstrapService(context.Background())
+	}()
+
+	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	_ = clientConn.Close()
+
+	select {
+	case got := <-wrapped:
+		if got == nil {
+			t.Fatal("startBootstrapService() wrapped nil connection")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startBootstrapService() did not wrap the accepted connection")
+	}
+
+	if err := <-done; err == nil || err.Error() != "stop" {
+		t.Fatalf("startBootstrapService() error = %v, want stop", err)
+	}
+}
+
 func TestClearPendingSessionsHandlesEmptyAndExistingSessions(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -2913,6 +3007,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalProbeEndpoint := probeEndpoint
 	originalDialBootstrap := dialBootstrap
 	originalListenBootstrap := listenBootstrap
+	originalWrapBootstrapConn := wrapBootstrapConn
 	originalLoadNodeRecords := loadNodeRecords
 	originalCurrentTime := currentTime
 	originalScheduleAfter := scheduleAfter
@@ -2933,6 +3028,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	probeEndpoint = measureEndpointLatency
 	dialBootstrap = dialBootstrapEndpoint
 	listenBootstrap = listenBootstrapEndpoint
+	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords = loadExistingNodeRecords
 	currentTime = time.Now
 	scheduleAfter = time.AfterFunc
@@ -2955,6 +3051,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 		probeEndpoint = originalProbeEndpoint
 		dialBootstrap = originalDialBootstrap
 		listenBootstrap = originalListenBootstrap
+		wrapBootstrapConn = originalWrapBootstrapConn
 		loadNodeRecords = originalLoadNodeRecords
 		currentTime = originalCurrentTime
 		scheduleAfter = originalScheduleAfter

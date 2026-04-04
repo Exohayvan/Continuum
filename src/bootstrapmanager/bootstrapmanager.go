@@ -21,6 +21,7 @@ import (
 
 	"continuum/src/accounts"
 	"continuum/src/datamanager"
+	"continuum/src/networkmanager"
 	"continuum/src/nodeid"
 	"gopkg.in/yaml.v3"
 )
@@ -167,24 +168,25 @@ type existingNodeRecords struct {
 }
 
 var (
-	ensureDataLayout = datamanager.EnsureLayout
-	readDirectory    = os.ReadDir
-	readManagedFile  = datamanager.ReadFile
-	writeManagedFile = datamanager.WriteFile
-	resolveNodeID    = nodeid.GetNodeID
-	createAccount    = accounts.Generate
-	recoverAccount   = accounts.Recover
-	httpClient       = &http.Client{Timeout: 5 * time.Second}
-	fetchRemoteList  = fetchRemoteBootstrapList
-	probeEndpoint    = measureEndpointLatency
-	dialBootstrap    = dialBootstrapEndpoint
-	listenBootstrap  = listenBootstrapEndpoint
-	loadNodeRecords  = loadExistingNodeRecords
-	currentTime      = time.Now
-	scheduleAfter    = time.AfterFunc
-	signPeerOrMeta   = signPayload
-	randomSource     = rand.Reader
-	serverStartOnce  sync.Once
+	ensureDataLayout  = datamanager.EnsureLayout
+	readDirectory     = os.ReadDir
+	readManagedFile   = datamanager.ReadFile
+	writeManagedFile  = datamanager.WriteFile
+	resolveNodeID     = nodeid.GetNodeID
+	createAccount     = accounts.Generate
+	recoverAccount    = accounts.Recover
+	httpClient        = &http.Client{Timeout: 5 * time.Second}
+	fetchRemoteList   = fetchRemoteBootstrapList
+	probeEndpoint     = measureEndpointLatency
+	dialBootstrap     = dialBootstrapEndpoint
+	listenBootstrap   = listenBootstrapEndpoint
+	wrapBootstrapConn = networkmanager.WrapConn
+	loadNodeRecords   = loadExistingNodeRecords
+	currentTime       = time.Now
+	scheduleAfter     = time.AfterFunc
+	signPeerOrMeta    = signPayload
+	randomSource      = rand.Reader
+	serverStartOnce   sync.Once
 
 	pendingSessionsMu sync.Mutex
 	pendingSessions   = map[string]*pendingSession{}
@@ -413,6 +415,7 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 	if err != nil {
 		return ConnectResult{}, err
 	}
+	conn = wrapBootstrapConn(conn)
 
 	if err := conn.SetDeadline(currentTime().Add(bootstrapSessionTTL)); err != nil {
 		conn.Close()
@@ -692,7 +695,7 @@ func startBootstrapService(ctx context.Context) error {
 			return err
 		}
 
-		go handleBootstrapConnection(conn)
+		go handleBootstrapConnection(wrapBootstrapConn(conn))
 	}
 }
 
