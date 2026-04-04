@@ -71,14 +71,17 @@ const (
 	updateFailureText              = "update failed"
 	ensureBundleReadyErrorFormat   = "EnsureBundleReadyOnStartup() error = %v"
 	xattrBinaryPath                = "/usr/bin/xattr"
-	applicationsDir                = "/Applications"
 	startFailedText                = "start failed"
 	openBinaryPath                 = "/usr/bin/open"
 	resolveUpdateAssetErrorFormat  = "resolveUpdateAsset() error = %v"
 )
 
+func applicationsDirPath() string {
+	return filepath.Join(string(os.PathSeparator), "Applications")
+}
+
 func applicationsAppBundlePath() string {
-	return filepath.Join(applicationsDir, AppName+".app")
+	return filepath.Join(applicationsDirPath(), AppName+".app")
 }
 
 func applicationsAppBinaryPath() string {
@@ -1448,8 +1451,9 @@ func TestRelaunchBinary(t *testing.T) {
 		if name != tmpContinuumBinary {
 			t.Fatalf(processMismatchFormat, name, tmpContinuumBinary)
 		}
-		if attr == nil || attr.Dir != "/tmp" {
-			t.Fatalf(dirMismatchFormat, attr.Dir, "/tmp")
+		wantDir := filepath.Dir(tmpContinuumBinary)
+		if attr == nil || attr.Dir != wantDir {
+			t.Fatalf(dirMismatchFormat, attr.Dir, wantDir)
 		}
 
 		return os.FindProcess(os.Getpid())
@@ -1499,8 +1503,9 @@ func TestRelaunchBinaryUsesOpenForAppBundle(t *testing.T) {
 		if len(argv) != 3 || argv[0] != "open" || argv[1] != "-n" || argv[2] != applicationsAppBundlePath() {
 			t.Fatalf("argv = %q, want open -n %q", argv, applicationsAppBundlePath())
 		}
-		if attr == nil || attr.Dir != applicationsDir {
-			t.Fatalf(dirMismatchFormat, attr.Dir, applicationsDir)
+		wantDir := applicationsDirPath()
+		if attr == nil || attr.Dir != wantDir {
+			t.Fatalf(dirMismatchFormat, attr.Dir, wantDir)
 		}
 
 		return os.FindProcess(os.Getpid())

@@ -15,15 +15,18 @@ const (
 	testAppBundle            = "Continuum.app"
 	writeFileErrorFormat     = "WriteFile() error = %v"
 	writeFileWantErrorFormat = "WriteFile() error = %v, want %v"
-	applicationsDir          = "/Applications"
 )
 
+func applicationsDirPath() string {
+	return filepath.Join(string(os.PathSeparator), "Applications")
+}
+
 func applicationsBundleBinaryPath() string {
-	return filepath.Join(applicationsDir, testAppBundle, "Contents", "MacOS", "Continuum")
+	return filepath.Join(applicationsDirPath(), testAppBundle, "Contents", "MacOS", "Continuum")
 }
 
 func applicationsBundlePath() string {
-	return filepath.Join(applicationsDir, testAppBundle)
+	return filepath.Join(applicationsDirPath(), testAppBundle)
 }
 
 func TestEnsureLayoutCreatesManagedDirectoriesNextToExecutable(t *testing.T) {
@@ -320,7 +323,12 @@ func TestManagedPathRejectsAbsolutePaths(t *testing.T) {
 
 	managerState.setDataPath(t.TempDir())
 
-	_, err := managedPath(filepath.Join(string(os.PathSeparator), "tmp", "absolute"))
+	absolutePath, err := filepath.Abs(filepath.Join("tmp", "absolute"))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+
+	_, err = managedPath(absolutePath)
 	if !errors.Is(err, errPathEscapesDataRoot) {
 		t.Fatalf("managedPath() error = %v, want %v", err, errPathEscapesDataRoot)
 	}
@@ -351,7 +359,7 @@ func TestAppDirectoryUsesExecutableParent(t *testing.T) {
 
 func TestAppDirectoryUsesBundleParent(t *testing.T) {
 	got := appDirectory(applicationsBundleBinaryPath())
-	want := applicationsDir
+	want := applicationsDirPath()
 	if got != want {
 		t.Fatalf("appDirectory() = %q, want %q", got, want)
 	}

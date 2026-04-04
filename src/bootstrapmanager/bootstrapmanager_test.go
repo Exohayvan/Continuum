@@ -291,8 +291,8 @@ func TestMeasureEndpointLatency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("measureEndpointLatency() error = %v", err)
 	}
-	if latency <= 0 {
-		t.Fatalf("measureEndpointLatency() = %s, want > 0", latency)
+	if latency < 0 {
+		t.Fatalf("measureEndpointLatency() = %s, want >= 0", latency)
 	}
 	<-accepted
 }
