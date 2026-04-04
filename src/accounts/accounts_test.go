@@ -1026,8 +1026,14 @@ func mustDecodeMeta(t *testing.T, data []byte) Meta {
 func buildBlobWithEncryptedKey(t *testing.T, accountID string, publicKey ed25519.PublicKey, signingKey ed25519.PrivateKey, encryptedKey ed25519.PrivateKey, password string) []byte {
 	t.Helper()
 
-	salt := []byte("0123456789abcdef")
-	nonce := []byte("0123456789ab")
+	salt := make([]byte, blobSaltLength)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		t.Fatalf("io.ReadFull(salt) error = %v", err)
+	}
+	nonce := make([]byte, blobNonceLength)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		t.Fatalf("io.ReadFull(nonce) error = %v", err)
+	}
 	key, err := scrypt.Key([]byte(password), salt, blobN, blobR, blobP, blobKeyLength)
 	if err != nil {
 		t.Fatalf("scrypt.Key() error = %v", err)
