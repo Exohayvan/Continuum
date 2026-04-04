@@ -89,7 +89,13 @@ function formatBytes(bytes) {
         unitIndex += 1;
     }
 
-    const decimals = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+    let decimals = 2;
+    if (value >= 100 || unitIndex === 0) {
+        decimals = 0;
+    } else if (value >= 10) {
+        decimals = 1;
+    }
+
     return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
@@ -180,7 +186,9 @@ function selectBootstrapNode(node) {
         bootstrapCustomPortElement.value = node.port ? String(node.port) : "";
     }
 
-    bootstrapSelectionElement.textContent = `Selected ${node.name || "bootstrap node"} at ${node.endpoint || `${node.host}:${node.port}`}.`;
+    const selectedName = node.name || "bootstrap node";
+    const selectedEndpoint = node.endpoint || `${node.host}:${node.port}`;
+    bootstrapSelectionElement.textContent = `Selected ${selectedName} at ${selectedEndpoint}.`;
     bootstrapSelectionElement.classList.remove("is-placeholder");
     statusElement.textContent = "Bootstrap node selected";
 }
@@ -391,7 +399,7 @@ function applyBootstrapState(bootstrapState) {
         statusElement.textContent = "Bootstrap required";
     }
 
-    if (bootstrapCustomPortElement && bootstrapCustomPortElement.value === "") {
+    if (bootstrapCustomPortElement?.value === "") {
         bootstrapCustomPortElement.value = "58103";
     }
     if (!awaitingBootstrapPassword && bootstrapPasswordMetaElement) {
@@ -465,19 +473,15 @@ function bindDashboardEvents() {
         return;
     }
 
-    dashboardEventUnsubscribers = dashboardEventBindings.map(([eventName, section]) =>
-        runtimeBridge.EventsOnMultiple(eventName, (...eventData) => {
-            applySectionUpdate(section, normalizeEventPayload(eventData));
-        }, -1),
-    );
-
-    dashboardEventUnsubscribers.push(
+    dashboardEventUnsubscribers = [
+        ...dashboardEventBindings.map(([eventName, section]) =>
+            runtimeBridge.EventsOnMultiple(eventName, (...eventData) => {
+                applySectionUpdate(section, normalizeEventPayload(eventData));
+            }, -1),
+        ),
         runtimeBridge.EventsOnMultiple("dashboard:snapshot", (...eventData) => {
             applySnapshot(normalizeEventPayload(eventData));
         }, -1),
-    );
-
-    dashboardEventUnsubscribers.push(
         runtimeBridge.EventsOnMultiple("updater:status", (...eventData) => {
             const updateStatus = normalizeEventPayload(eventData);
             if (!("currentVersion" in updateStatus) || !("remoteVersion" in updateStatus)) {
@@ -492,7 +496,7 @@ function bindDashboardEvents() {
 
             statusElement.textContent = bootstrapRequired ? "Bootstrap required" : "Dashboard ready";
         }, -1),
-    );
+    ];
 }
 
 function releaseDashboardEvents() {
