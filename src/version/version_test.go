@@ -239,8 +239,6 @@ func TestParseString(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	t.Parallel()
-
 	originalRuntimeVersion := runtimeVersion
 	runtimeVersion = "1.5.0"
 	t.Cleanup(func() {
@@ -253,8 +251,6 @@ func TestGet(t *testing.T) {
 }
 
 func TestGetDefaultsToStoredRuntimeVersion(t *testing.T) {
-	t.Parallel()
-
 	originalRuntimeVersion := runtimeVersion
 	runtimeVersion = "dev"
 	t.Cleanup(func() {
