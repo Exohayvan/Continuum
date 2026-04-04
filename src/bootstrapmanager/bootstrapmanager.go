@@ -179,7 +179,10 @@ var (
 	probeEndpoint    = measureEndpointLatency
 	dialBootstrap    = dialBootstrapEndpoint
 	listenBootstrap  = listenBootstrapEndpoint
+	loadNodeRecords  = loadExistingNodeRecords
 	currentTime      = time.Now
+	scheduleAfter    = time.AfterFunc
+	signPeerOrMeta   = signPayload
 	randomSource     = rand.Reader
 	serverStartOnce  sync.Once
 
@@ -452,7 +455,7 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 		nodeID:   localNodeID,
 		response: response,
 	}
-	session.timer = time.AfterFunc(bootstrapSessionTTL, func() {
+	session.timer = scheduleAfter(bootstrapSessionTTL, func() {
 		removePendingSession(sessionID)
 	})
 	storePendingSession(session)
@@ -787,7 +790,7 @@ func buildBootstrapStartResponse(remoteAddr net.Addr, request bootstrapSessionSt
 		}
 	}
 
-	existingRecords, err := loadExistingNodeRecords(request.NodeID)
+	existingRecords, err := loadNodeRecords(request.NodeID)
 	if err != nil {
 		response.Error = err.Error()
 		return response
@@ -977,7 +980,7 @@ func buildPeerFile(observedIPv4 string, port int, accountID string, privateKey e
 		PORT:      port,
 		AccountID: accountID,
 	}
-	signature, err := signPayload(privateKey, unsigned)
+	signature, err := signPeerOrMeta(privateKey, unsigned)
 	if err != nil {
 		return nil, err
 	}
@@ -998,7 +1001,7 @@ func buildMetaFile(nodeID, accountID, firstSeen string, revision int, privateKey
 		Revision:  revision,
 		UpdatedAt: currentTime().UTC().Format(time.RFC3339),
 	}
-	signature, err := signPayload(privateKey, unsigned)
+	signature, err := signPeerOrMeta(privateKey, unsigned)
 	if err != nil {
 		return nil, err
 	}
@@ -1042,7 +1045,7 @@ func validateFinalizeRequest(request bootstrapSessionFinalizeRequest) error {
 		return err
 	}
 
-	existingRecords, err := loadExistingNodeRecords(request.NodeID)
+	existingRecords, err := loadNodeRecords(request.NodeID)
 	if err != nil {
 		return err
 	}
