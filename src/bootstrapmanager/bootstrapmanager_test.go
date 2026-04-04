@@ -26,26 +26,53 @@ import (
 )
 
 const (
-	testBootstrapHost      = "162.191.52.239"
-	testBootstrapTimestamp = "2026-04-02T00:00:00Z"
-	testJoiningNodeID      = "joining-node"
-	testJoiningPeerFile    = "joining-node.peer"
-	testJoiningMetaFile    = "joining-node.meta"
-	testDecodeErrorFormat  = "Decode() error = %v"
-	testEncodeErrorFormat  = "Encode() error = %v"
-	testAccountID          = "account-123"
-	testAccountPassword    = "secret-pass"
-	testAccountKeyFile     = "account-123.key"
-	testAccountBlobFile    = "account-123.blob"
-	testAccountBlobJSON    = `{"AccountID":"account-123"}`
-	testSessionID          = "session-123"
-	testRecoveryPassword   = "recovery-pass"
-	testRecoverySessionID  = "session-recover"
-	testBootstrapNodeID    = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
-	testLayoutErrorText    = "layout failed"
-	testReadDirErrorText   = "readdir failed"
-	testLoadNodesErrorText = "bootstrap load failed"
-	testSessionMissingText = "bootstrap session expired or was not found"
+	testBootstrapHost                        = "162.191.52.239"
+	testLoopbackHost                         = "127.0.0.1"
+	testBootstrapName                        = "na-east"
+	testBootstrapTimestamp                   = "2026-04-02T00:00:00Z"
+	testUpdatedTimestamp                     = "2026-04-02T01:00:00Z"
+	testJoiningNodeID                        = "joining-node"
+	testJoiningPeerFile                      = "joining-node.peer"
+	testJoiningMetaFile                      = "joining-node.meta"
+	testDecodeErrorFormat                    = "Decode() error = %v"
+	testEncodeErrorFormat                    = "Encode() error = %v"
+	testEncodeStartRequestErrorFormat        = "Encode(start request) error = %v"
+	testDecodeStartResponseErrorFormat       = "Decode(start response) error = %v"
+	testEmptyStartResponseErrorFormat        = "startResponse.Error = %q, want empty"
+	testEncodeFinalizeRequestErrorFormat     = "Encode(finalize request) error = %v"
+	testDecodeFinalizeResponseErrorFormat    = "Decode(finalize response) error = %v"
+	testMarshalErrorFormat                   = "Marshal() error = %v"
+	testMkdirAllErrorFormat                  = "MkdirAll() error = %v"
+	testWriteFileErrorFormat                 = "WriteFile() error = %v"
+	testLoadStateNeedsBootstrapText          = "LoadState() NeedsBootstrap = false, want true"
+	testBuildAccountFixturesErrorFormat      = "buildAccountFixtures() error = %v"
+	testBuildAccountFixturesOtherErrorFormat = "buildAccountFixtures() other error = %v"
+	testConnectErrorFormat                   = "Connect() error = %v"
+	testConnectWantErrorFormat               = "Connect() error = %v, want %v"
+	testGenerateKeyErrorFormat               = "GenerateKey() error = %v"
+	testDefaultListenPortFormat              = "defaultListenPort() = %d, want %d"
+	testLoadExistingNodeRecordsErrorFormat   = "loadExistingNodeRecords() error = %v"
+	testLoadExistingAccountRecordsWantErrFmt = "loadExistingAccountRecords() error = %v, want %v"
+	testVerifyPublicKeyFileErrorFormat       = "VerifyPublicKeyFile() error = %v"
+	testAccountID                            = "account-123"
+	testAccountPassword                      = "secret-pass"
+	testAccountKeyFile                       = "account-123.key"
+	testAccountBlobFile                      = "account-123.blob"
+	testAccountBlobJSON                      = `{"AccountID":"account-123"}`
+	testSessionID                            = "session-123"
+	testRecoveryPassword                     = "recovery-pass"
+	testRecoverySessionID                    = "session-recover"
+	testBootstrapNodeID                      = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
+	testInvalidJSON                          = "not-json"
+	testInvalidBase64                        = "not-base64"
+	testWriteFailedText                      = "write failed"
+	testSignFailedText                       = "sign failed"
+	testFinalizeFailedText                   = "finalize failed"
+	testPeerReadFailedText                   = "peer read failed"
+	testLayoutErrorText                      = "layout failed"
+	testReadDirErrorText                     = "readdir failed"
+	testLoadNodesErrorText                   = "bootstrap load failed"
+	testSessionMissingText                   = "bootstrap session expired or was not found"
 )
 
 func TestLoadStateReturnsExistingPeerCount(t *testing.T) {
@@ -55,13 +82,13 @@ func TestLoadStateReturnsExistingPeerCount(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "data")
 	peersPath := filepath.Join(dataPath, "network", "peers")
 	if err := os.MkdirAll(peersPath, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(testMkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(filepath.Join(peersPath, "known-node.peer"), []byte("{}"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(testWriteFileErrorFormat, err)
 	}
 	if err := os.WriteFile(filepath.Join(peersPath, "notes.txt"), []byte("ignore"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(testWriteFileErrorFormat, err)
 	}
 
 	ensureDataLayout = func() (string, error) {
@@ -95,7 +122,7 @@ func TestLoadStateReturnsLayoutError(t *testing.T) {
 
 	state := LoadState()
 	if !state.NeedsBootstrap {
-		t.Fatal("LoadState() NeedsBootstrap = false, want true")
+		t.Fatal(testLoadStateNeedsBootstrapText)
 	}
 	if !strings.Contains(state.Error, testLayoutErrorText) {
 		t.Fatalf("LoadState() Error = %q, want layout error", state.Error)
@@ -116,7 +143,7 @@ func TestLoadStateReturnsPeerInspectError(t *testing.T) {
 
 	state := LoadState()
 	if !state.NeedsBootstrap {
-		t.Fatal("LoadState() NeedsBootstrap = false, want true")
+		t.Fatal(testLoadStateNeedsBootstrapText)
 	}
 	if !strings.Contains(state.Error, testReadDirErrorText) {
 		t.Fatalf("LoadState() Error = %q, want inspect error", state.Error)
@@ -130,7 +157,7 @@ func TestLoadStateReturnsBootstrapNodeLoadError(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "data")
 	peersPath := filepath.Join(dataPath, "network", "peers")
 	if err := os.MkdirAll(peersPath, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(testMkdirAllErrorFormat, err)
 	}
 	ensureDataLayout = func() (string, error) {
 		return dataPath, nil
@@ -141,7 +168,7 @@ func TestLoadStateReturnsBootstrapNodeLoadError(t *testing.T) {
 
 	state := LoadState()
 	if !state.NeedsBootstrap {
-		t.Fatal("LoadState() NeedsBootstrap = false, want true")
+		t.Fatal(testLoadStateNeedsBootstrapText)
 	}
 	if !strings.Contains(state.Error, testLoadNodesErrorText) {
 		t.Fatalf("LoadState() Error = %q, want load-nodes error", state.Error)
@@ -155,7 +182,7 @@ func TestLoadStateFetchesAndSortsBootstrapNodes(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "data")
 	peersPath := filepath.Join(dataPath, "network", "peers")
 	if err := os.MkdirAll(peersPath, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(testMkdirAllErrorFormat, err)
 	}
 
 	ensureDataLayout = func() (string, error) {
@@ -175,13 +202,13 @@ func TestLoadStateFetchesAndSortsBootstrapNodes(t *testing.T) {
 
 	state := LoadState()
 	if !state.NeedsBootstrap {
-		t.Fatal("LoadState() NeedsBootstrap = false, want true")
+		t.Fatal(testLoadStateNeedsBootstrapText)
 	}
 	if len(state.Nodes) != 1 {
 		t.Fatalf("len(LoadState().Nodes) = %d, want %d", len(state.Nodes), 1)
 	}
-	if state.Nodes[0].Name != "na-east" || state.Nodes[0].LatencyMilliseconds != 12 {
-		t.Fatalf("LoadState().Nodes[0] = %#v, want na-east first with 12ms", state.Nodes[0])
+	if state.Nodes[0].Name != testBootstrapName || state.Nodes[0].LatencyMilliseconds != 12 {
+		t.Fatalf("LoadState().Nodes[0] = %#v, want %s first with 12ms", state.Nodes[0], testBootstrapName)
 	}
 }
 
@@ -191,7 +218,7 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 
 	probeEndpoint = func(string, int) (time.Duration, error) {
@@ -293,7 +320,7 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 
 	result, err := Connect(testBootstrapHost, 58103, "")
 	if err != nil {
-		t.Fatalf("Connect() error = %v", err)
+		t.Fatalf(testConnectErrorFormat, err)
 	}
 	if result.Connected {
 		t.Fatal("Connect() Connected = true, want false")
@@ -359,10 +386,10 @@ func TestPeerFileCountSkipsDirectories(t *testing.T) {
 
 	peersPath := filepath.Join(t.TempDir(), "peers")
 	if err := os.MkdirAll(filepath.Join(peersPath, "nested"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+		t.Fatalf(testMkdirAllErrorFormat, err)
 	}
 	if err := os.WriteFile(filepath.Join(peersPath, "known.peer"), []byte("{}"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+		t.Fatalf(testWriteFileErrorFormat, err)
 	}
 
 	count, err := peerFileCount(peersPath)
@@ -411,7 +438,7 @@ func TestProbeBootstrapNodeStoresProbeError(t *testing.T) {
 		return 0, wantErr
 	}
 
-	node := Node{Name: "na-east", Host: testBootstrapHost, Port: 58103}
+	node := Node{Name: testBootstrapName, Host: testBootstrapHost, Port: 58103}
 	probeBootstrapNode(&node, "")
 	if node.Error != wantErr.Error() {
 		t.Fatalf("probeBootstrapNode() Error = %q, want %q", node.Error, wantErr.Error())
@@ -422,8 +449,8 @@ func TestProbeBootstrapNodeStoresProbeError(t *testing.T) {
 }
 
 func TestBootstrapProbeHostUsesLoopbackForLocalNode(t *testing.T) {
-	if got := bootstrapProbeHost(Node{NodeID: testJoiningNodeID, Host: testBootstrapHost}, testJoiningNodeID); got != "127.0.0.1" {
-		t.Fatalf("bootstrapProbeHost() = %q, want %q", got, "127.0.0.1")
+	if got := bootstrapProbeHost(Node{NodeID: testJoiningNodeID, Host: testBootstrapHost}, testJoiningNodeID); got != testLoopbackHost {
+		t.Fatalf("bootstrapProbeHost() = %q, want %q", got, testLoopbackHost)
 	}
 }
 
@@ -516,14 +543,14 @@ func TestMeasureEndpointLatencyReturnsDialError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", testLoopbackHost+":0")
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
 
-	if _, err := measureEndpointLatency("127.0.0.1", port); err == nil {
+	if _, err := measureEndpointLatency(testLoopbackHost, port); err == nil {
 		t.Fatal("measureEndpointLatency() error = nil, want dial failure")
 	}
 }
@@ -532,7 +559,7 @@ func TestMeasureEndpointLatency(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", testLoopbackHost+":0")
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
@@ -548,7 +575,7 @@ func TestMeasureEndpointLatency(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	latency, err := measureEndpointLatency("127.0.0.1", port)
+	latency, err := measureEndpointLatency(testLoopbackHost, port)
 	if err != nil {
 		t.Fatalf("measureEndpointLatency() error = %v", err)
 	}
@@ -580,7 +607,7 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	conn, err := dialBootstrapEndpoint(context.Background(), "127.0.0.1", port)
+	conn, err := dialBootstrapEndpoint(context.Background(), testLoopbackHost, port)
 	if err != nil {
 		t.Fatalf("dialBootstrapEndpoint() error = %v", err)
 	}
@@ -596,7 +623,7 @@ func TestConnectRejectsInvalidEndpoint(t *testing.T) {
 	defer restore()
 
 	if _, err := Connect("", 0, ""); !errors.Is(err, errInvalidBootstrapEndpoint) {
-		t.Fatalf("Connect() error = %v, want %v", err, errInvalidBootstrapEndpoint)
+		t.Fatalf(testConnectWantErrorFormat, err, errInvalidBootstrapEndpoint)
 	}
 }
 
@@ -622,7 +649,7 @@ func TestConnectReturnsDialError(t *testing.T) {
 	}
 
 	if _, err := Connect(testBootstrapHost, 58103, ""); !errors.Is(err, wantErr) {
-		t.Fatalf("Connect() error = %v, want %v", err, wantErr)
+		t.Fatalf(testConnectWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -657,10 +684,10 @@ func TestConnectUsesLoopbackForLocalBootstrapNode(t *testing.T) {
 
 	result, err := Connect(testBootstrapHost, 58103, testJoiningNodeID)
 	if err != nil {
-		t.Fatalf("Connect() error = %v", err)
+		t.Fatalf(testConnectErrorFormat, err)
 	}
-	if dialedHost != "127.0.0.1" {
-		t.Fatalf("Connect() dialed host = %q, want %q", dialedHost, "127.0.0.1")
+	if dialedHost != testLoopbackHost {
+		t.Fatalf("Connect() dialed host = %q, want %q", dialedHost, testLoopbackHost)
 	}
 
 	removePendingSession(result.SessionID)
@@ -677,7 +704,7 @@ func TestConnectReturnsDeadlineError(t *testing.T) {
 	}
 
 	if _, err := Connect(testBootstrapHost, 58103, ""); !errors.Is(err, wantErr) {
-		t.Fatalf("Connect() error = %v, want %v", err, wantErr)
+		t.Fatalf(testConnectWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -686,13 +713,13 @@ func TestConnectReturnsEncodeError(t *testing.T) {
 	defer restore()
 
 	resolveNodeID = func() string { return testJoiningNodeID }
-	wantErr := errors.New("write failed")
+	wantErr := errors.New(testWriteFailedText)
 	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
 		return &stubConn{writeErr: wantErr}, nil
 	}
 
 	if _, err := Connect(testBootstrapHost, 58103, ""); !errors.Is(err, wantErr) {
-		t.Fatalf("Connect() error = %v, want %v", err, wantErr)
+		t.Fatalf(testConnectWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -702,7 +729,7 @@ func TestConnectReturnsDecodeError(t *testing.T) {
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
-		return &stubConn{readData: []byte("not-json")}, nil
+		return &stubConn{readData: []byte(testInvalidJSON)}, nil
 	}
 
 	if _, err := Connect(testBootstrapHost, 58103, ""); err == nil {
@@ -717,7 +744,7 @@ func TestConnectReturnsBootstrapResponseError(t *testing.T) {
 	resolveNodeID = func() string { return testJoiningNodeID }
 	responseData, err := json.Marshal(bootstrapSessionStartResponse{Error: "bootstrap rejected"})
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
@@ -735,7 +762,7 @@ func TestConnectRejectsUnusableEndpointResponse(t *testing.T) {
 	resolveNodeID = func() string { return testJoiningNodeID }
 	responseData, err := json.Marshal(bootstrapSessionStartResponse{ObservedIPv4: "", Port: 0})
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
@@ -753,7 +780,7 @@ func TestConnectReturnsSessionIDError(t *testing.T) {
 	resolveNodeID = func() string { return testJoiningNodeID }
 	responseData, err := json.Marshal(bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103})
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
@@ -798,7 +825,7 @@ func TestConnectRemovesPendingSessionWhenTimerFires(t *testing.T) {
 
 	result, err := Connect(testBootstrapHost, 58103, "")
 	if err != nil {
-		t.Fatalf("Connect() error = %v", err)
+		t.Fatalf(testConnectErrorFormat, err)
 	}
 	if scheduled == nil {
 		t.Fatal("Connect() did not schedule session timeout cleanup")
@@ -942,7 +969,7 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 
 	writtenFiles := map[string][]byte{}
@@ -963,15 +990,15 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 		NodeID:     testJoiningNodeID,
 		ListenPort: 58103,
 	}); err != nil {
-		t.Fatalf("Encode(start request) error = %v", err)
+		t.Fatalf(testEncodeStartRequestErrorFormat, err)
 	}
 
 	var startResponse bootstrapSessionStartResponse
 	if err := json.NewDecoder(clientConn).Decode(&startResponse); err != nil {
-		t.Fatalf("Decode(start response) error = %v", err)
+		t.Fatalf(testDecodeStartResponseErrorFormat, err)
 	}
 	if startResponse.Error != "" {
-		t.Fatalf("startResponse.Error = %q, want empty", startResponse.Error)
+		t.Fatalf(testEmptyStartResponseErrorFormat, startResponse.Error)
 	}
 
 	peerData := buildSignedPeerFixture(t, privateKey, startResponse.ObservedIPv4, startResponse.Port, accountID)
@@ -986,12 +1013,12 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 		AccountPubKey: accountPubKeyData,
 		AccountMeta:   accountMetaData,
 	}); err != nil {
-		t.Fatalf("Encode(finalize request) error = %v", err)
+		t.Fatalf(testEncodeFinalizeRequestErrorFormat, err)
 	}
 
 	var finalizeResponse bootstrapSessionFinalizeResponse
 	if err := json.NewDecoder(clientConn).Decode(&finalizeResponse); err != nil {
-		t.Fatalf("Decode(finalize response) error = %v", err)
+		t.Fatalf(testDecodeFinalizeResponseErrorFormat, err)
 	}
 	if finalizeResponse.Error != "" {
 		t.Fatalf("finalizeResponse.Error = %q, want empty", finalizeResponse.Error)
@@ -1011,7 +1038,7 @@ func TestHandleBootstrapConnectionReturnsOnInvalidStartRequest(t *testing.T) {
 		close(done)
 	}()
 
-	if _, err := clientConn.Write([]byte("not-json")); err != nil {
+	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 	_ = clientConn.Close()
@@ -1024,7 +1051,7 @@ func TestHandleBootstrapConnectionReturnsOnStartResponseEncodeError(t *testing.T
 
 	conn := &stubConn{
 		readData:   mustMarshalJSON(t, bootstrapSessionStartRequest{Type: "start", NodeID: testJoiningNodeID, ListenPort: 58103}),
-		writeErr:   errors.New("write failed"),
+		writeErr:   errors.New(testWriteFailedText),
 		remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
 	}
 	handleBootstrapConnection(conn)
@@ -1048,7 +1075,7 @@ func TestHandleBootstrapConnectionReturnsOnFinalizeDecodeError(t *testing.T) {
 	conn := &stubConn{
 		readData: append(
 			mustMarshalJSON(t, bootstrapSessionStartRequest{Type: "start", NodeID: testJoiningNodeID, ListenPort: 58103}),
-			[]byte("\nnot-json")...,
+			[]byte("\n"+testInvalidJSON)...,
 		),
 		remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
 	}
@@ -1076,15 +1103,15 @@ func TestHandleBootstrapConnectionReturnsValidationError(t *testing.T) {
 		NodeID:     testJoiningNodeID,
 		ListenPort: 58103,
 	}); err != nil {
-		t.Fatalf("Encode(start request) error = %v", err)
+		t.Fatalf(testEncodeStartRequestErrorFormat, err)
 	}
 
 	var startResponse bootstrapSessionStartResponse
 	if err := json.NewDecoder(clientConn).Decode(&startResponse); err != nil {
-		t.Fatalf("Decode(start response) error = %v", err)
+		t.Fatalf(testDecodeStartResponseErrorFormat, err)
 	}
 	if startResponse.Error != "" {
-		t.Fatalf("startResponse.Error = %q, want empty", startResponse.Error)
+		t.Fatalf(testEmptyStartResponseErrorFormat, startResponse.Error)
 	}
 
 	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionFinalizeRequest{
@@ -1092,12 +1119,12 @@ func TestHandleBootstrapConnectionReturnsValidationError(t *testing.T) {
 		NodeID:    testJoiningNodeID,
 		AccountID: testAccountID,
 	}); err != nil {
-		t.Fatalf("Encode(finalize request) error = %v", err)
+		t.Fatalf(testEncodeFinalizeRequestErrorFormat, err)
 	}
 
 	var finalizeResponse bootstrapSessionFinalizeResponse
 	if err := json.NewDecoder(clientConn).Decode(&finalizeResponse); err != nil {
-		t.Fatalf("Decode(finalize response) error = %v", err)
+		t.Fatalf(testDecodeFinalizeResponseErrorFormat, err)
 	}
 	if finalizeResponse.Error == "" {
 		t.Fatal("handleBootstrapConnection() did not encode validation error response")
@@ -1113,11 +1140,11 @@ func TestHandleBootstrapConnectionReturnsWriteNetworkFilesError(t *testing.T) {
 
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	readManagedFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
 	writeManagedFile = func(string, []byte, os.FileMode) error {
-		return errors.New("write failed")
+		return errors.New(testWriteFailedText)
 	}
 
 	serverConn, clientConn := net.Pipe()
@@ -1137,15 +1164,15 @@ func TestHandleBootstrapConnectionReturnsWriteNetworkFilesError(t *testing.T) {
 		NodeID:     testJoiningNodeID,
 		ListenPort: 58103,
 	}); err != nil {
-		t.Fatalf("Encode(start request) error = %v", err)
+		t.Fatalf(testEncodeStartRequestErrorFormat, err)
 	}
 
 	var startResponse bootstrapSessionStartResponse
 	if err := json.NewDecoder(clientConn).Decode(&startResponse); err != nil {
-		t.Fatalf("Decode(start response) error = %v", err)
+		t.Fatalf(testDecodeStartResponseErrorFormat, err)
 	}
 	if startResponse.Error != "" {
-		t.Fatalf("startResponse.Error = %q, want empty", startResponse.Error)
+		t.Fatalf(testEmptyStartResponseErrorFormat, startResponse.Error)
 	}
 
 	peerData := buildSignedPeerFixture(t, privateKey, testBootstrapHost, 58103, accountID)
@@ -1160,15 +1187,15 @@ func TestHandleBootstrapConnectionReturnsWriteNetworkFilesError(t *testing.T) {
 		AccountPubKey: accountPubKeyData,
 		AccountMeta:   accountMetaData,
 	}); err != nil {
-		t.Fatalf("Encode(finalize request) error = %v", err)
+		t.Fatalf(testEncodeFinalizeRequestErrorFormat, err)
 	}
 
 	var finalizeResponse bootstrapSessionFinalizeResponse
 	if err := json.NewDecoder(clientConn).Decode(&finalizeResponse); err != nil {
-		t.Fatalf("Decode(finalize response) error = %v", err)
+		t.Fatalf(testDecodeFinalizeResponseErrorFormat, err)
 	}
-	if finalizeResponse.Error != "write failed" {
-		t.Fatalf("finalizeResponse.Error = %q, want %q", finalizeResponse.Error, "write failed")
+	if finalizeResponse.Error != testWriteFailedText {
+		t.Fatalf("finalizeResponse.Error = %q, want %q", finalizeResponse.Error, testWriteFailedText)
 	}
 
 	_ = clientConn.Close()
@@ -1228,7 +1255,7 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(testGenerateKeyErrorFormat, err)
 	}
 	recoverCalled := false
 	recoverAccount = func(blobData []byte, password string) (accounts.Material, error) {
@@ -1345,7 +1372,7 @@ func TestCompleteReturnsBuildArtifactsError(t *testing.T) {
 		return material, nil
 	}
 	signPeerOrMeta = func(ed25519.PrivateKey, any) (string, error) {
-		return "", errors.New("sign failed")
+		return "", errors.New(testSignFailedText)
 	}
 
 	session := &pendingSession{
@@ -1362,8 +1389,8 @@ func TestCompleteReturnsBuildArtifactsError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 
-	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != "sign failed" {
-		t.Fatalf("Complete() error = %v, want sign failed", err)
+	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testSignFailedText {
+		t.Fatalf("Complete() error = %v, want %s", err, testSignFailedText)
 	}
 }
 
@@ -1376,7 +1403,7 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 		return material, nil
 	}
 	writeManagedFile = func(string, []byte, os.FileMode) error {
-		return errors.New("write failed")
+		return errors.New(testWriteFailedText)
 	}
 
 	session := &pendingSession{
@@ -1393,8 +1420,8 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 
-	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != "write failed" {
-		t.Fatalf("Complete() error = %v, want write failed", err)
+	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testWriteFailedText {
+		t.Fatalf("Complete() error = %v, want %s", err, testWriteFailedText)
 	}
 }
 
@@ -1410,7 +1437,7 @@ func TestCompleteReturnsFinalizeError(t *testing.T) {
 
 	session := &pendingSession{
 		id:     testSessionID,
-		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionFinalizeResponse{Error: "finalize failed"})},
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionFinalizeResponse{Error: testFinalizeFailedText})},
 		nodeID: testJoiningNodeID,
 		response: bootstrapSessionStartResponse{
 			ObservedIPv4: testBootstrapHost,
@@ -1422,8 +1449,8 @@ func TestCompleteReturnsFinalizeError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 
-	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != "finalize failed" {
-		t.Fatalf("Complete() error = %v, want finalize failed", err)
+	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testFinalizeFailedText {
+		t.Fatalf("Complete() error = %v, want %s", err, testFinalizeFailedText)
 	}
 }
 
@@ -1472,7 +1499,7 @@ func TestFinalizeBootstrapSessionReturnsEncodeError(t *testing.T) {
 	material := testBootstrapMaterial(t)
 	session := &pendingSession{
 		id:     testSessionID,
-		conn:   &stubConn{writeErr: errors.New("write failed")},
+		conn:   &stubConn{writeErr: errors.New(testWriteFailedText)},
 		nodeID: testJoiningNodeID,
 	}
 
@@ -1489,7 +1516,7 @@ func TestFinalizeBootstrapSessionReturnsDecodeError(t *testing.T) {
 	material := testBootstrapMaterial(t)
 	session := &pendingSession{
 		id:     testSessionID,
-		conn:   &stubConn{readData: []byte("not-json")},
+		conn:   &stubConn{readData: []byte(testInvalidJSON)},
 		nodeID: testJoiningNodeID,
 	}
 
@@ -1506,13 +1533,13 @@ func TestFinalizeBootstrapSessionReturnsFinalizeResponseError(t *testing.T) {
 	material := testBootstrapMaterial(t)
 	session := &pendingSession{
 		id:     testSessionID,
-		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionFinalizeResponse{Error: "finalize failed"})},
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionFinalizeResponse{Error: testFinalizeFailedText})},
 		nodeID: testJoiningNodeID,
 	}
 
 	err := finalizeBootstrapSession(testSessionID, session, material, completionArtifacts{})
-	if err == nil || err.Error() != "finalize failed" {
-		t.Fatalf("finalizeBootstrapSession() error = %v, want finalize failed", err)
+	if err == nil || err.Error() != testFinalizeFailedText {
+		t.Fatalf("finalizeBootstrapSession() error = %v, want %s", err, testFinalizeFailedText)
 	}
 }
 
@@ -1524,7 +1551,7 @@ func TestValidateFinalizeRequestRejectsNodeAccountTakeover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAccountFixtures() original error = %v", err)
 	}
-	newAccountID, newPrivateKey, newBlobData, newPubKeyData, newAccountMetaData, err := buildAccountFixtures("2026-04-02T01:00:00Z")
+	newAccountID, newPrivateKey, newBlobData, newPubKeyData, newAccountMetaData, err := buildAccountFixtures(testUpdatedTimestamp)
 	if err != nil {
 		t.Fatalf("buildAccountFixtures() new error = %v", err)
 	}
@@ -1565,7 +1592,7 @@ func TestValidateFinalizeRequestRejectsNodeAccountTakeover(t *testing.T) {
 func TestBootstrapPortForNodeUsesDefaultPortWhenConfiguredPortIsInvalid(t *testing.T) {
 	port, ok := bootstrapPortForNode(bootstrapList{
 		Nodes: map[string]bootstrapNodeConfig{
-			"na-east": {
+			testBootstrapName: {
 				NodeID: testBootstrapNodeID,
 				Port:   0,
 			},
@@ -1585,7 +1612,7 @@ func TestDefaultListenPortReturnsDefaultOnLoadError(t *testing.T) {
 	}
 
 	if got := defaultListenPort(testJoiningNodeID); got != DefaultPort {
-		t.Fatalf("defaultListenPort() = %d, want %d", got, DefaultPort)
+		t.Fatalf(testDefaultListenPortFormat, got, DefaultPort)
 	}
 }
 
@@ -1598,7 +1625,7 @@ func TestDefaultListenPortReturnsDefaultWhenNodeIsUnknown(t *testing.T) {
 	}
 
 	if got := defaultListenPort("missing-node"); got != DefaultPort {
-		t.Fatalf("defaultListenPort() = %d, want %d", got, DefaultPort)
+		t.Fatalf(testDefaultListenPortFormat, got, DefaultPort)
 	}
 }
 
@@ -1607,18 +1634,18 @@ func TestDefaultListenPortReturnsConfiguredBootstrapPort(t *testing.T) {
 	defer restore()
 
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
-		return []byte(`
+		return []byte(fmt.Sprintf(`
 version: 1
 nodes:
   local:
-    node_id: "` + testJoiningNodeID + `"
-    host: "127.0.0.1"
+    node_id: "`+testJoiningNodeID+`"
+    host: "%s"
     port: 60001
-`), nil
+`, testLoopbackHost)), nil
 	}
 
 	if got := defaultListenPort(testJoiningNodeID); got != 60001 {
-		t.Fatalf("defaultListenPort() = %d, want %d", got, 60001)
+		t.Fatalf(testDefaultListenPortFormat, got, 60001)
 	}
 }
 
@@ -1638,7 +1665,7 @@ func TestBuildBootstrapStartResponseReturnsExistingRecordError(t *testing.T) {
 
 	readManagedFile = func(path string) ([]byte, error) {
 		if path == testPeerPath() {
-			return nil, errors.New("peer read failed")
+			return nil, errors.New(testPeerReadFailedText)
 		}
 		return nil, os.ErrNotExist
 	}
@@ -1655,7 +1682,7 @@ func TestBuildBootstrapStartResponseReturnsExistingRecordError(t *testing.T) {
 func TestLoadExistingNodeRecordsReturnsZeroForBlankNodeID(t *testing.T) {
 	records, err := loadExistingNodeRecords(" ")
 	if err != nil {
-		t.Fatalf("loadExistingNodeRecords() error = %v", err)
+		t.Fatalf(testLoadExistingNodeRecordsErrorFormat, err)
 	}
 	if records.KnownNode {
 		t.Fatal("loadExistingNodeRecords() KnownNode = true, want false")
@@ -1672,7 +1699,7 @@ func TestLoadExistingNodeRecordsReturnsZeroForMissingPeer(t *testing.T) {
 
 	records, err := loadExistingNodeRecords(testJoiningNodeID)
 	if err != nil {
-		t.Fatalf("loadExistingNodeRecords() error = %v", err)
+		t.Fatalf(testLoadExistingNodeRecordsErrorFormat, err)
 	}
 	if records.KnownNode {
 		t.Fatal("loadExistingNodeRecords() KnownNode = true, want false")
@@ -1683,7 +1710,7 @@ func TestLoadExistingNodeRecordsReturnsPeerReadError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	wantErr := errors.New("peer read failed")
+	wantErr := errors.New(testPeerReadFailedText)
 	readManagedFile = func(path string) ([]byte, error) {
 		if path == testPeerPath() {
 			return nil, wantErr
@@ -1713,7 +1740,7 @@ func TestLoadExistingNodeRecordsReturnsKnownNodeWithoutMeta(t *testing.T) {
 
 	records, err := loadExistingNodeRecords(testJoiningNodeID)
 	if err != nil {
-		t.Fatalf("loadExistingNodeRecords() error = %v", err)
+		t.Fatalf(testLoadExistingNodeRecordsErrorFormat, err)
 	}
 	if !records.KnownNode {
 		t.Fatal("loadExistingNodeRecords() KnownNode = false, want true")
@@ -1729,7 +1756,7 @@ func TestLoadExistingNodeRecordsReturnsMetaDecodeError(t *testing.T) {
 		case testPeerPath():
 			return []byte(`{}`), nil
 		case testMetaPath():
-			return []byte("not-json"), nil
+			return []byte(testInvalidJSON), nil
 		default:
 			return nil, os.ErrNotExist
 		}
@@ -1763,7 +1790,7 @@ func TestLoadExistingNodeRecordsReturnsKnownNodeWithoutAccount(t *testing.T) {
 
 	records, err := loadExistingNodeRecords(testJoiningNodeID)
 	if err != nil {
-		t.Fatalf("loadExistingNodeRecords() error = %v", err)
+		t.Fatalf(testLoadExistingNodeRecordsErrorFormat, err)
 	}
 	if !records.KnownNode {
 		t.Fatal("loadExistingNodeRecords() KnownNode = false, want true")
@@ -1820,7 +1847,7 @@ func TestLoadExistingAccountPubKeyReturnsVerifyError(t *testing.T) {
 	defer restore()
 
 	readManagedFile = func(string) ([]byte, error) {
-		return []byte("not-base64"), nil
+		return []byte(testInvalidBase64), nil
 	}
 
 	if _, _, err := loadExistingAccountPubKey(testAccountID); err == nil {
@@ -1837,7 +1864,7 @@ func TestLoadExistingAccountMetaReturnsMissing(t *testing.T) {
 	}
 	_, publicKey, _, _, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	pubKeyData := publicKey.Public().(ed25519.PublicKey)
 
@@ -1860,7 +1887,7 @@ func TestLoadExistingAccountMetaReturnsReadError(t *testing.T) {
 	}
 	_, publicKey, _, _, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	pubKeyData := publicKey.Public().(ed25519.PublicKey)
 
@@ -1874,11 +1901,11 @@ func TestLoadExistingAccountMetaReturnsVerifyError(t *testing.T) {
 	defer restore()
 
 	readManagedFile = func(string) ([]byte, error) {
-		return []byte("not-json"), nil
+		return []byte(testInvalidJSON), nil
 	}
 	_, publicKey, _, _, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	pubKeyData := publicKey.Public().(ed25519.PublicKey)
 
@@ -1896,11 +1923,11 @@ func TestLoadExistingAccountBlobReturnsMissing(t *testing.T) {
 	}
 	accountID, _, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
 	data, ok, err := loadExistingAccountBlob(accountID, accountPubKey)
@@ -1922,11 +1949,11 @@ func TestLoadExistingAccountBlobReturnsReadError(t *testing.T) {
 	}
 	accountID, _, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
 	if _, _, err := loadExistingAccountBlob(accountID, accountPubKey); !errors.Is(err, wantErr) {
@@ -1939,15 +1966,15 @@ func TestLoadExistingAccountBlobReturnsValidateError(t *testing.T) {
 	defer restore()
 
 	readManagedFile = func(string) ([]byte, error) {
-		return []byte("not-json"), nil
+		return []byte(testInvalidJSON), nil
 	}
 	accountID, _, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
 	if _, _, err := loadExistingAccountBlob(accountID, accountPubKey); err == nil {
@@ -1961,18 +1988,18 @@ func TestLoadExistingAccountBlobRejectsPublicKeyMismatch(t *testing.T) {
 
 	accountID, _, blobData, _, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
-	otherAccountID, _, _, otherPubKeyData, _, err := buildAccountFixtures("2026-04-02T01:00:00Z")
+	otherAccountID, _, _, otherPubKeyData, _, err := buildAccountFixtures(testUpdatedTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() other error = %v", err)
+		t.Fatalf(testBuildAccountFixturesOtherErrorFormat, err)
 	}
 	readManagedFile = func(string) ([]byte, error) {
 		return blobData, nil
 	}
 	accountPubKey, err := accounts.VerifyPublicKeyFile(otherAccountID, otherPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
 	if _, _, err := loadExistingAccountBlob(accountID, accountPubKey); err == nil {
@@ -1998,7 +2025,7 @@ func TestLoadExistingAccountRecordsReturnsPubKeyError(t *testing.T) {
 	}
 
 	if _, err := loadExistingAccountRecords(testJoiningNodeID, []byte("{}"), records); !errors.Is(err, wantErr) {
-		t.Fatalf("loadExistingAccountRecords() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoadExistingAccountRecordsWantErrFmt, err, wantErr)
 	}
 }
 
@@ -2033,7 +2060,7 @@ func TestLoadExistingAccountRecordsReturnsAccountMetaError(t *testing.T) {
 
 	accountID, _, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	wantErr := errors.New("account meta read failed")
 	readManagedFile = func(path string) ([]byte, error) {
@@ -2056,7 +2083,7 @@ func TestLoadExistingAccountRecordsReturnsAccountMetaError(t *testing.T) {
 	}
 
 	if _, err := loadExistingAccountRecords(testJoiningNodeID, []byte("{}"), records); !errors.Is(err, wantErr) {
-		t.Fatalf("loadExistingAccountRecords() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoadExistingAccountRecordsWantErrFmt, err, wantErr)
 	}
 }
 
@@ -2066,7 +2093,7 @@ func TestLoadExistingAccountRecordsReturnsWithoutAccountMeta(t *testing.T) {
 
 	accountID, _, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	readManagedFile = func(path string) ([]byte, error) {
 		switch path {
@@ -2105,7 +2132,7 @@ func TestLoadExistingAccountRecordsReturnsVerifyMetaError(t *testing.T) {
 
 	accountID, _, _, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	readManagedFile = func(path string) ([]byte, error) {
 		switch path {
@@ -2126,7 +2153,7 @@ func TestLoadExistingAccountRecordsReturnsVerifyMetaError(t *testing.T) {
 		},
 	}
 
-	if _, err := loadExistingAccountRecords(testJoiningNodeID, []byte("not-json"), records); err == nil {
+	if _, err := loadExistingAccountRecords(testJoiningNodeID, []byte(testInvalidJSON), records); err == nil {
 		t.Fatal("loadExistingAccountRecords() error = nil, want node meta verification failure")
 	}
 }
@@ -2137,7 +2164,7 @@ func TestLoadExistingAccountRecordsReturnsBlobError(t *testing.T) {
 
 	accountID, privateKey, _, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	wantErr := errors.New("blob read failed")
 	nodeMetaData := buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 1)
@@ -2163,7 +2190,7 @@ func TestLoadExistingAccountRecordsReturnsBlobError(t *testing.T) {
 	}
 
 	if _, err := loadExistingAccountRecords(testJoiningNodeID, nodeMetaData, records); !errors.Is(err, wantErr) {
-		t.Fatalf("loadExistingAccountRecords() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoadExistingAccountRecordsWantErrFmt, err, wantErr)
 	}
 }
 
@@ -2187,7 +2214,7 @@ func TestExtractObservedIPv4ReturnsErrors(t *testing.T) {
 }
 
 func TestSignPayloadReturnsMarshalError(t *testing.T) {
-	if _, err := signPayload(make(ed25519.PrivateKey, ed25519.PrivateKeySize), func() {}); err == nil {
+	if _, err := signPayload(make(ed25519.PrivateKey, ed25519.PrivateKeySize), make(chan int)); err == nil {
 		t.Fatal("signPayload() error = nil, want marshal failure")
 	}
 }
@@ -2195,7 +2222,7 @@ func TestSignPayloadReturnsMarshalError(t *testing.T) {
 func TestValidateFinalizeRequestRejectsInvalidPubKey(t *testing.T) {
 	if err := validateFinalizeRequest(bootstrapSessionFinalizeRequest{
 		AccountID:     testAccountID,
-		AccountPubKey: []byte("not-base64"),
+		AccountPubKey: []byte(testInvalidBase64),
 	}); err == nil {
 		t.Fatal("validateFinalizeRequest() error = nil, want pubkey failure")
 	}
@@ -2204,7 +2231,7 @@ func TestValidateFinalizeRequestRejectsInvalidPubKey(t *testing.T) {
 func TestValidateFinalizeRequestRejectsInvalidPeerAndMetaPayloads(t *testing.T) {
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 
 	if err := validateFinalizeRequest(bootstrapSessionFinalizeRequest{
@@ -2213,7 +2240,7 @@ func TestValidateFinalizeRequestRejectsInvalidPeerAndMetaPayloads(t *testing.T) 
 		AccountPubKey: accountPubKeyData,
 		AccountMeta:   accountMetaData,
 		AccountBlob:   blobData,
-		PeerData:      []byte("not-json"),
+		PeerData:      []byte(testInvalidJSON),
 		MetaData:      buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 1),
 	}); err == nil {
 		t.Fatal("validateFinalizeRequest() error = nil, want peer validation failure")
@@ -2226,7 +2253,7 @@ func TestValidateFinalizeRequestRejectsInvalidPeerAndMetaPayloads(t *testing.T) 
 		AccountMeta:   accountMetaData,
 		AccountBlob:   blobData,
 		PeerData:      buildSignedPeerFixture(t, privateKey, testBootstrapHost, 58103, accountID),
-		MetaData:      []byte("not-json"),
+		MetaData:      []byte(testInvalidJSON),
 	}); err == nil {
 		t.Fatal("validateFinalizeRequest() error = nil, want meta validation failure")
 	}
@@ -2235,14 +2262,14 @@ func TestValidateFinalizeRequestRejectsInvalidPeerAndMetaPayloads(t *testing.T) 
 func TestValidateFinalizeRequestRejectsInvalidAccountMeta(t *testing.T) {
 	accountID, privateKey, blobData, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 
 	if err := validateFinalizeRequest(bootstrapSessionFinalizeRequest{
 		NodeID:        testJoiningNodeID,
 		AccountID:     accountID,
 		AccountPubKey: accountPubKeyData,
-		AccountMeta:   []byte("not-json"),
+		AccountMeta:   []byte(testInvalidJSON),
 		AccountBlob:   blobData,
 		PeerData:      buildSignedPeerFixture(t, privateKey, testBootstrapHost, 58103, accountID),
 		MetaData:      buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 1),
@@ -2254,7 +2281,7 @@ func TestValidateFinalizeRequestRejectsInvalidAccountMeta(t *testing.T) {
 func TestValidateFinalizeRequestRejectsInvalidAccountBlob(t *testing.T) {
 	accountID, privateKey, _, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 
 	if err := validateFinalizeRequest(bootstrapSessionFinalizeRequest{
@@ -2262,7 +2289,7 @@ func TestValidateFinalizeRequestRejectsInvalidAccountBlob(t *testing.T) {
 		AccountID:     accountID,
 		AccountPubKey: accountPubKeyData,
 		AccountMeta:   accountMetaData,
-		AccountBlob:   []byte("not-json"),
+		AccountBlob:   []byte(testInvalidJSON),
 		PeerData:      buildSignedPeerFixture(t, privateKey, testBootstrapHost, 58103, accountID),
 		MetaData:      buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 1),
 	}); err == nil {
@@ -2273,11 +2300,11 @@ func TestValidateFinalizeRequestRejectsInvalidAccountBlob(t *testing.T) {
 func TestValidateFinalizeRequestRejectsAccountBlobPublicKeyMismatch(t *testing.T) {
 	accountID, privateKey, _, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
-	_, _, otherBlobData, _, _, err := buildAccountFixtures("2026-04-02T01:00:00Z")
+	_, _, otherBlobData, _, _, err := buildAccountFixtures(testUpdatedTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() other error = %v", err)
+		t.Fatalf(testBuildAccountFixturesOtherErrorFormat, err)
 	}
 
 	if err := validateFinalizeRequest(bootstrapSessionFinalizeRequest{
@@ -2299,11 +2326,11 @@ func TestValidateFinalizeRequestRejectsExistingRecordLoadError(t *testing.T) {
 
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	readManagedFile = func(path string) ([]byte, error) {
 		if path == testPeerPath() {
-			return nil, errors.New("peer read failed")
+			return nil, errors.New(testPeerReadFailedText)
 		}
 		return nil, os.ErrNotExist
 	}
@@ -2328,11 +2355,11 @@ func TestValidateFinalizeRequestRejectsExistingPubKeyMismatch(t *testing.T) {
 
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
-	otherAccountID, otherPrivateKey, otherBlobData, otherPubKeyData, otherAccountMetaData, err := buildAccountFixtures("2026-04-02T01:00:00Z")
+	otherAccountID, otherPrivateKey, otherBlobData, otherPubKeyData, otherAccountMetaData, err := buildAccountFixtures(testUpdatedTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() other error = %v", err)
+		t.Fatalf(testBuildAccountFixturesOtherErrorFormat, err)
 	}
 	readManagedFile = func(path string) ([]byte, error) {
 		switch path {
@@ -2371,15 +2398,15 @@ func TestValidateFinalizeRequestRejectsTrustedPublicKeyMismatchFromExistingRecor
 
 	accountID, privateKey, blobData, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
-	otherAccountID, _, _, otherAccountPubKeyData, _, err := buildAccountFixtures("2026-04-02T01:00:00Z")
+	otherAccountID, _, _, otherAccountPubKeyData, _, err := buildAccountFixtures(testUpdatedTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() other error = %v", err)
+		t.Fatalf(testBuildAccountFixturesOtherErrorFormat, err)
 	}
 	otherPubKey, err := accounts.VerifyPublicKeyFile(otherAccountID, otherAccountPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
 	loadNodeRecords = func(string) (existingNodeRecords, error) {
@@ -2410,14 +2437,14 @@ func TestValidateFinalizeRequestRejectsTrustedPublicKeyMismatchFromExistingRecor
 func TestVerifyPeerFileReturnsValidationErrors(t *testing.T) {
 	accountID, privateKey, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
-	if err := verifyPeerFile([]byte("not-json"), accountID, accountPubKey); err == nil {
+	if err := verifyPeerFile([]byte(testInvalidJSON), accountID, accountPubKey); err == nil {
 		t.Fatal("verifyPeerFile() error = nil, want JSON failure")
 	}
 
@@ -2428,7 +2455,7 @@ func TestVerifyPeerFileReturnsValidationErrors(t *testing.T) {
 		Signature: "bad",
 	})
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	if err := verifyPeerFile(badAccountData, accountID, accountPubKey); err == nil {
 		t.Fatal("verifyPeerFile() error = nil, want account mismatch")
@@ -2441,7 +2468,7 @@ func TestVerifyPeerFileReturnsValidationErrors(t *testing.T) {
 		Signature: "bad",
 	})
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	if err := verifyPeerFile(zeroPortData, accountID, accountPubKey); err == nil {
 		t.Fatal("verifyPeerFile() error = nil, want zero port failure")
@@ -2455,7 +2482,7 @@ func TestVerifyPeerFileReturnsValidationErrors(t *testing.T) {
 	valid.Signature = "bad"
 	invalidSigData, err := json.Marshal(valid)
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	if err := verifyPeerFile(invalidSigData, accountID, accountPubKey); err == nil {
 		t.Fatal("verifyPeerFile() error = nil, want signature failure")
@@ -2465,14 +2492,14 @@ func TestVerifyPeerFileReturnsValidationErrors(t *testing.T) {
 func TestVerifyMetaFileReturnsValidationErrors(t *testing.T) {
 	accountID, privateKey, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
 	if err != nil {
-		t.Fatalf("buildAccountFixtures() error = %v", err)
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
 	}
 	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
 	if err != nil {
-		t.Fatalf("VerifyPublicKeyFile() error = %v", err)
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
 	}
 
-	if err := verifyMetaFile([]byte("not-json"), testJoiningNodeID, accountID, accountPubKey); err == nil {
+	if err := verifyMetaFile([]byte(testInvalidJSON), testJoiningNodeID, accountID, accountPubKey); err == nil {
 		t.Fatal("verifyMetaFile() error = nil, want JSON failure")
 	}
 
@@ -2527,13 +2554,13 @@ func TestVerifyMetaFileReturnsValidationErrors(t *testing.T) {
 func TestVerifySignedPayloadReturnsErrors(t *testing.T) {
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(testGenerateKeyErrorFormat, err)
 	}
 
-	if err := verifySignedPayload(func() {}, "", publicKey); err == nil {
+	if err := verifySignedPayload(make(chan int), "", publicKey); err == nil {
 		t.Fatal("verifySignedPayload() error = nil, want marshal failure")
 	}
-	if err := verifySignedPayload(map[string]string{"ok": "yes"}, "not-base64", publicKey); err == nil {
+	if err := verifySignedPayload(map[string]string{"ok": "yes"}, testInvalidBase64, publicKey); err == nil {
 		t.Fatal("verifySignedPayload() error = nil, want decode failure")
 	}
 	if err := verifySignedPayload(map[string]string{"ok": "yes"}, base64Signature("bad"), publicKey); err == nil {
@@ -2563,7 +2590,7 @@ func TestWriteNetworkFilesReturnsWriteErrors(t *testing.T) {
 
 			writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
 				if path == tc.failPath {
-					return errors.New("write failed")
+					return errors.New(testWriteFailedText)
 				}
 				return nil
 			}
@@ -2581,7 +2608,7 @@ func TestBuildCompletionArtifactsReturnsPeerSignError(t *testing.T) {
 
 	material := testBootstrapMaterial(t)
 	signPeerOrMeta = func(ed25519.PrivateKey, any) (string, error) {
-		return "", errors.New("sign failed")
+		return "", errors.New(testSignFailedText)
 	}
 
 	_, err := buildCompletionArtifacts(&pendingSession{
@@ -2591,8 +2618,8 @@ func TestBuildCompletionArtifactsReturnsPeerSignError(t *testing.T) {
 			Port:         58103,
 		},
 	}, material)
-	if err == nil || err.Error() != "sign failed" {
-		t.Fatalf("buildCompletionArtifacts() error = %v, want sign failed", err)
+	if err == nil || err.Error() != testSignFailedText {
+		t.Fatalf("buildCompletionArtifacts() error = %v, want %s", err, testSignFailedText)
 	}
 }
 
@@ -2605,7 +2632,7 @@ func TestBuildCompletionArtifactsReturnsMetaSignError(t *testing.T) {
 	signPeerOrMeta = func(ed25519.PrivateKey, any) (string, error) {
 		callCount++
 		if callCount == 2 {
-			return "", errors.New("sign failed")
+			return "", errors.New(testSignFailedText)
 		}
 		return "signature", nil
 	}
@@ -2617,15 +2644,15 @@ func TestBuildCompletionArtifactsReturnsMetaSignError(t *testing.T) {
 			Port:         58103,
 		},
 	}, material)
-	if err == nil || err.Error() != "sign failed" {
-		t.Fatalf("buildCompletionArtifacts() error = %v, want sign failed", err)
+	if err == nil || err.Error() != testSignFailedText {
+		t.Fatalf("buildCompletionArtifacts() error = %v, want %s", err, testSignFailedText)
 	}
 }
 
 func TestBuildCompletionArtifactsReturnsAccountMetaError(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(testGenerateKeyErrorFormat, err)
 	}
 
 	_, err = buildCompletionArtifacts(&pendingSession{
@@ -2669,7 +2696,7 @@ func TestStartBootstrapServiceLaunchesConnectionHandler(t *testing.T) {
 		done <- startBootstrapService(context.Background())
 	}()
 
-	if _, err := clientConn.Write([]byte("not-json")); err != nil {
+	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 	_ = clientConn.Close()
@@ -2774,7 +2801,7 @@ func testBootstrapMaterial(t *testing.T) accounts.Material {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(testGenerateKeyErrorFormat, err)
 	}
 
 	return accounts.Material{
@@ -3069,7 +3096,7 @@ func mustMarshalJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
 	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
+		t.Fatalf(testMarshalErrorFormat, err)
 	}
 	return data
 }
