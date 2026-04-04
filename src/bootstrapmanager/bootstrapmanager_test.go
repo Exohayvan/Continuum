@@ -43,6 +43,7 @@ const (
 	testEncodeFinalizeRequestErrorFormat     = "Encode(finalize request) error = %v"
 	testDecodeFinalizeResponseErrorFormat    = "Decode(finalize response) error = %v"
 	testMarshalErrorFormat                   = "Marshal() error = %v"
+	testWriteErrorFormat                     = "Write() error = %v"
 	testMkdirAllErrorFormat                  = "MkdirAll() error = %v"
 	testWriteFileErrorFormat                 = "WriteFile() error = %v"
 	testLoadStateNeedsBootstrapText          = "LoadState() NeedsBootstrap = false, want true"
@@ -1084,7 +1085,7 @@ func TestHandleBootstrapConnectionReturnsOnInvalidStartRequest(t *testing.T) {
 	}()
 
 	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
-		t.Fatalf("Write() error = %v", err)
+		t.Fatalf(testWriteErrorFormat, err)
 	}
 	_ = clientConn.Close()
 	<-done
@@ -2742,7 +2743,7 @@ func TestStartBootstrapServiceLaunchesConnectionHandler(t *testing.T) {
 	}()
 
 	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
-		t.Fatalf("Write() error = %v", err)
+		t.Fatalf(testWriteErrorFormat, err)
 	}
 	_ = clientConn.Close()
 
@@ -2783,7 +2784,7 @@ func TestStartBootstrapServiceWrapsAcceptedConnection(t *testing.T) {
 	}()
 
 	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
-		t.Fatalf("Write() error = %v", err)
+		t.Fatalf(testWriteErrorFormat, err)
 	}
 	_ = clientConn.Close()
 
