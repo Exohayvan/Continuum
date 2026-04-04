@@ -212,6 +212,20 @@ func TestSnapshotReturnsDirectorySizeError(t *testing.T) {
 	}
 }
 
+func TestSnapshotReturnsDataRootError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	wantErr := errors.New("missing executable")
+	currentExecutable = func() (string, error) {
+		return "", wantErr
+	}
+
+	_, err := Snapshot()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestSnapshotReturnsFilesystemError(t *testing.T) {
 	resetDataManagerTestState(t)
 
@@ -232,6 +246,37 @@ func TestSnapshotReturnsFilesystemError(t *testing.T) {
 	_, err := Snapshot()
 	if err == nil || err.Error() != "statfs failed" {
 		t.Fatalf("Snapshot() error = %v, want statfs failure", err)
+	}
+}
+
+func TestSnapshotReturnsManagedDataSizeError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	root := t.TempDir()
+	appPath := filepath.Join(root, "Continuum")
+	dataPath := filepath.Join(root, "data")
+	if err := os.WriteFile(appPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(dataPath, directoryMode); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	currentExecutable = func() (string, error) {
+		return appPath, nil
+	}
+	managerState.setDataPath(dataPath)
+	wantErr := errors.New("managed data walk failed")
+	walkManagedPath = func(root string, walkFn fs.WalkDirFunc) error {
+		if root == dataPath {
+			return wantErr
+		}
+		return filepath.WalkDir(root, walkFn)
+	}
+
+	_, err := Snapshot()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Snapshot() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -273,6 +318,20 @@ func TestReadFileReturnsUnderlyingError(t *testing.T) {
 	_, err := ReadFile("stats/missing.json")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ReadFile() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestManagedPathReturnsDataRootError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	wantErr := errors.New("missing executable")
+	currentExecutable = func() (string, error) {
+		return "", wantErr
+	}
+
+	_, err := managedPath("stats/usage.json")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("managedPath() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -381,6 +440,97 @@ func TestInstallPathUsesBundleRoot(t *testing.T) {
 	}
 }
 
+func TestPathSizeReturnsWalkEntryError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	wantErr := errors.New("walk entry failed")
+	walkManagedPath = func(root string, walkFn fs.WalkDirFunc) error {
+		return walkFn(root, nil, wantErr)
+	}
+
+	_, err := pathSize(t.TempDir())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("pathSize() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestPathSizeReturnsEntryInfoError(t *testing.T) {
+	resetDataManagerTestState(t)
+
+	wantErr := errors.New("entry info failed")
+	walkManagedPath = func(root string, walkFn fs.WalkDirFunc) error {
+		return walkFn(root, testDirEntry{
+			name:    "usage.json",
+			infoErr: wantErr,
+		}, nil)
+	}
+
+	_, err := pathSize(t.TempDir())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("pathSize() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestBytesPerSecondToMegabitsReturnsZeroWithoutTraffic(t *testing.T) {
+	if got := bytesPerSecondToMegabits(0, throughputWindow); got != 0 {
+		t.Fatalf("bytesPerSecondToMegabits() = %f, want 0", got)
+	}
+}
+
+func TestBytesPerSecondToMegabitsReturnsZeroWithoutPositiveWindow(t *testing.T) {
+	if got := bytesPerSecondToMegabits(128, 0); got != 0 {
+		t.Fatalf("bytesPerSecondToMegabits() = %f, want 0", got)
+	}
+}
+
+func TestTransferTotalsDropsExpiredTransfers(t *testing.T) {
+	var state trackedState
+	baseTime := time.Unix(1_700_000_000, 0)
+	state.transfers = []transferEvent{
+		{
+			recordedAt: baseTime.Add(-2 * throughputWindow),
+			readBytes:  7,
+			writeBytes: 11,
+		},
+		{
+			recordedAt: baseTime,
+			readBytes:  13,
+			writeBytes: 17,
+		},
+	}
+
+	readBytes, writeBytes := state.transferTotals(baseTime)
+	if readBytes != 13 || writeBytes != 17 {
+		t.Fatalf("transferTotals() = (%d, %d), want (%d, %d)", readBytes, writeBytes, 13, 17)
+	}
+	if len(state.transfers) != 1 {
+		t.Fatalf("len(state.transfers) = %d, want %d", len(state.transfers), 1)
+	}
+	if state.transfers[0].readBytes != 13 || state.transfers[0].writeBytes != 17 {
+		t.Fatalf("state.transfers[0] = %#v, want retained latest event", state.transfers[0])
+	}
+}
+
+func TestTrimTransfersLockedNoOpWhenNothingExpired(t *testing.T) {
+	var state trackedState
+	baseTime := time.Unix(1_700_000_000, 0)
+	state.transfers = []transferEvent{
+		{
+			recordedAt: baseTime,
+			readBytes:  5,
+			writeBytes: 9,
+		},
+	}
+
+	state.trimTransfersLocked(baseTime)
+	if len(state.transfers) != 1 {
+		t.Fatalf("len(state.transfers) = %d, want %d", len(state.transfers), 1)
+	}
+	if state.transfers[0].readBytes != 5 || state.transfers[0].writeBytes != 9 {
+		t.Fatalf("state.transfers[0] = %#v, want unchanged event", state.transfers[0])
+	}
+}
+
 func resetDataManagerTestState(t *testing.T) {
 	originalCurrentExecutable := currentExecutable
 	originalCreateDirectory := createDirectory
@@ -410,3 +560,42 @@ func resetDataManagerTestState(t *testing.T) {
 		managerState = trackedState{}
 	})
 }
+
+type testDirEntry struct {
+	name    string
+	dir     bool
+	infoErr error
+}
+
+func (e testDirEntry) Name() string {
+	return e.name
+}
+
+func (e testDirEntry) IsDir() bool {
+	return e.dir
+}
+
+func (e testDirEntry) Type() fs.FileMode {
+	if e.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+
+func (e testDirEntry) Info() (fs.FileInfo, error) {
+	if e.infoErr != nil {
+		return nil, e.infoErr
+	}
+	return fakeFileInfo{name: e.name}, nil
+}
+
+type fakeFileInfo struct {
+	name string
+}
+
+func (i fakeFileInfo) Name() string       { return i.name }
+func (i fakeFileInfo) Size() int64        { return 0 }
+func (i fakeFileInfo) Mode() fs.FileMode  { return 0 }
+func (i fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (i fakeFileInfo) IsDir() bool        { return false }
+func (i fakeFileInfo) Sys() interface{}   { return nil }
