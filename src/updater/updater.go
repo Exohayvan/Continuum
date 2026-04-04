@@ -71,7 +71,7 @@ var (
 	writeTextFile     = os.WriteFile
 	startOSProcess    = os.StartProcess
 	lookPath          = exec.LookPath
-	runCommandOutput  = func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() }
+	runCommandOutput  = runCommandOutputDefault
 	startAsync        = startAsyncDefault
 	runCheckAndApply  = CheckAndApply
 	runCheckStatus    = CheckStatus
@@ -107,6 +107,10 @@ func startAsyncDefault(fn func()) {
 	go fn()
 }
 
+func runCommandOutputDefault(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
 func defaultLoopTicker(interval time.Duration) loopTicker {
 	return timeTicker{Ticker: time.NewTicker(interval)}
 }
@@ -135,10 +139,7 @@ func EnsureBundleReadyOnStartup() error {
 
 	bundlePath, err := appBundleRoot(currentPath)
 	if err != nil {
-		if errors.Is(err, errAppBundleMissing) {
-			return nil
-		}
-		return err
+		return nil
 	}
 
 	return clearBundleQuarantine(bundlePath)

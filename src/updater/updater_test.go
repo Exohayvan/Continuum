@@ -120,6 +120,14 @@ func TestTimeTickerChan(t *testing.T) {
 	}
 }
 
+func TestRunCommandOutputDefaultReturnsErrorForMissingBinary(t *testing.T) {
+	t.Parallel()
+
+	if _, err := runCommandOutputDefault("continuum-missing-binary-for-test"); err == nil {
+		t.Fatal("runCommandOutputDefault() error = nil, want missing binary failure")
+	}
+}
+
 func TestStartAsyncDefaultRunsFunction(t *testing.T) {
 	done := make(chan struct{})
 
@@ -1000,6 +1008,52 @@ func TestReplaceAppBundleQuarantineClearFailureRestoresPreviousBundle(t *testing
 	}
 }
 
+func TestReplaceAppBundleQuarantineClearFailureRestoreError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	lookPath = func(string) (string, error) {
+		return xattrBinaryPath, nil
+	}
+	runCommandOutput = func(string, ...string) ([]byte, error) {
+		return []byte("operation not permitted"), fmt.Errorf("exit status 1")
+	}
+
+	root := t.TempDir()
+	currentBundle := filepath.Join(root, AppName+".app")
+	currentExec := filepath.Join(currentBundle, "Contents", "MacOS", AppName)
+	replacementBundle := filepath.Join(root, "download", AppName+".app")
+	replacementExec := filepath.Join(replacementBundle, "Contents", "MacOS", AppName)
+
+	if err := os.MkdirAll(filepath.Dir(currentExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(currentExec, []byte("old"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(replacementExec), 0o755); err != nil {
+		t.Fatalf(mkdirAllErrorFormat, err)
+	}
+	if err := os.WriteFile(replacementExec, []byte("new"), 0o755); err != nil {
+		t.Fatalf(writeFileErrorFormat, err)
+	}
+
+	originalRenamePath := renamePath
+	renamePath = func(oldPath, newPath string) error {
+		if oldPath == currentBundle+previousSuffix && newPath == currentBundle {
+			return fmt.Errorf(renameFailedError)
+		}
+		return originalRenamePath(oldPath, newPath)
+	}
+
+	if _, err := replaceAppBundle(currentExec, replacementBundle); err == nil {
+		t.Fatal("replaceAppBundle() error = nil, want restore failure")
+	} else if !strings.Contains(err.Error(), "restore failed") {
+		t.Fatalf("replaceAppBundle() error = %q, want restore failure detail", err)
+	}
+}
+
 func TestEnsureBundleReadyOnStartupNoOpOutsideDarwin(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -1008,6 +1062,20 @@ func TestEnsureBundleReadyOnStartupNoOpOutsideDarwin(t *testing.T) {
 	currentExecutable = func() (string, error) {
 		t.Fatal("EnsureBundleReadyOnStartup() requested executable outside darwin")
 		return "", nil
+	}
+
+	if err := EnsureBundleReadyOnStartup(); err != nil {
+		t.Fatalf(ensureBundleReadyErrorFormat, err)
+	}
+}
+
+func TestEnsureBundleReadyOnStartupIgnoresExecutableError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	currentExecutable = func() (string, error) {
+		return "", fmt.Errorf("executable failed")
 	}
 
 	if err := EnsureBundleReadyOnStartup(); err != nil {
@@ -1074,6 +1142,71 @@ func TestEnsureBundleReadyOnStartupNoOpOutsideAppBundle(t *testing.T) {
 
 	if err := EnsureBundleReadyOnStartup(); err != nil {
 		t.Fatalf(ensureBundleReadyErrorFormat, err)
+	}
+}
+
+func TestClearBundleQuarantineNoOpOutsideDarwin(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "linux"
+	lookPath = func(string) (string, error) {
+		t.Fatal("clearBundleQuarantine() looked up xattr outside darwin")
+		return "", nil
+	}
+
+	if err := clearBundleQuarantine(applicationsAppBundlePath()); err != nil {
+		t.Fatalf("clearBundleQuarantine() error = %v", err)
+	}
+}
+
+func TestClearBundleQuarantineReturnsLookPathError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	wantErr := fmt.Errorf("lookup failed")
+	lookPath = func(string) (string, error) {
+		return "", wantErr
+	}
+
+	if err := clearBundleQuarantine(applicationsAppBundlePath()); !errors.Is(err, wantErr) {
+		t.Fatalf("clearBundleQuarantine() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestClearBundleQuarantineIgnoresMissingAttribute(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	lookPath = func(string) (string, error) {
+		return xattrBinaryPath, nil
+	}
+	runCommandOutput = func(string, ...string) ([]byte, error) {
+		return []byte("No such xattr: com.apple.quarantine"), fmt.Errorf("exit status 1")
+	}
+
+	if err := clearBundleQuarantine(applicationsAppBundlePath()); err != nil {
+		t.Fatalf("clearBundleQuarantine() error = %v", err)
+	}
+}
+
+func TestClearBundleQuarantineReturnsRawErrorWithoutOutput(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	hostGOOS = "darwin"
+	wantErr := fmt.Errorf("exit status 1")
+	lookPath = func(string) (string, error) {
+		return xattrBinaryPath, nil
+	}
+	runCommandOutput = func(string, ...string) ([]byte, error) {
+		return nil, wantErr
+	}
+
+	if err := clearBundleQuarantine(applicationsAppBundlePath()); !errors.Is(err, wantErr) {
+		t.Fatalf("clearBundleQuarantine() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -1396,6 +1529,23 @@ func TestRelaunchBinaryOpenLookupError(t *testing.T) {
 	}
 }
 
+func TestRelaunchBinaryOpenStartError(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	appBinary := applicationsAppBinaryPath()
+	lookPath = func(string) (string, error) {
+		return openBinaryPath, nil
+	}
+	startOSProcess = func(string, []string, *os.ProcAttr) (*os.Process, error) {
+		return nil, fmt.Errorf(startFailedText)
+	}
+
+	if err := relaunchBinary(appBinary); err == nil {
+		t.Fatal("relaunchBinary() error = nil, want open start failure")
+	}
+}
+
 func TestStartBackground(t *testing.T) {
 	restore := stubUpdaterHooks(t)
 	defer restore()
@@ -1611,6 +1761,18 @@ func TestCheckAndApplyWrapperStoresUpdateError(t *testing.T) {
 	}
 	if cachedUpdateError() == "" {
 		t.Fatal("cachedUpdateError() = empty string, want stored failure")
+	}
+}
+
+func TestStoreUpdateErrorClearsWhenNil(t *testing.T) {
+	restore := stubUpdaterHooks(t)
+	defer restore()
+
+	storeUpdateError(errors.New(updateFailureText))
+	storeUpdateError(nil)
+
+	if got := cachedUpdateError(); got != "" {
+		t.Fatalf("cachedUpdateError() = %q, want empty string", got)
 	}
 }
 
@@ -2309,7 +2471,7 @@ func stubUpdaterHooks(t *testing.T) func() {
 	writeTextFile = os.WriteFile
 	startOSProcess = os.StartProcess
 	lookPath = exec.LookPath
-	runCommandOutput = func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() }
+	runCommandOutput = runCommandOutputDefault
 	startAsync = startAsyncDefault
 	runCheckAndApply = CheckAndApply
 	runCheckStatus = CheckStatus
