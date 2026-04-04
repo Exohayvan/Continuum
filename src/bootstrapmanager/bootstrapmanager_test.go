@@ -1622,6 +1622,354 @@ func TestNormalizeUsername(t *testing.T) {
 	}
 }
 
+func TestRecoverUsesCompletionPath(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	createAccount = func(password string) (accounts.Material, error) {
+		if password != testAccountPassword {
+			t.Fatalf("createAccount() password = %q, want %q", password, testAccountPassword)
+		}
+		return material, nil
+	}
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	storePendingSession(&pendingSession{
+		id:       testSessionID,
+		conn:     clientConn,
+		nodeID:   testJoiningNodeID,
+		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	go respondToFinalizeRequest(t, serverConn)
+
+	if _, err := Recover(testSessionID, testAccountPassword); err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+}
+
+func TestRegisterReturnsUsernameRequiredError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	if _, err := Register(testSessionID, " ", testAccountPassword); err == nil {
+		t.Fatal("Register() error = nil, want username required failure")
+	}
+}
+
+func TestRegisterReturnsMissingSessionError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Register() error = nil, want missing session failure")
+	}
+}
+
+func TestRegisterReturnsCreateAccountError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	wantErr := errors.New("create failed")
+	createAccount = func(string) (accounts.Material, error) { return accounts.Material{}, wantErr }
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestRegisterReturnsUsernameIndexLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	createAccount = func(string) (accounts.Material, error) {
+		return accounts.Material{AccountID: testAccountID}, nil
+	}
+	wantErr := errors.New("load index failed")
+	loadUsernameIndex = func() (map[string]string, error) { return nil, wantErr }
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestRegisterReturnsUsernameIndexSaveError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	createAccount = func(string) (accounts.Material, error) { return material, nil }
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{}, nil }
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+	wantErr := errors.New("save index failed")
+	saveUsernameIndex = func(map[string]string) error { return wantErr }
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	storePendingSession(&pendingSession{
+		id:       testSessionID,
+		conn:     clientConn,
+		nodeID:   testJoiningNodeID,
+		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	go respondToFinalizeRequest(t, serverConn)
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestRegisterAllowsExistingUsernameForSameAccountID(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	createAccount = func(string) (accounts.Material, error) { return material, nil }
+	loadUsernameIndex = func() (map[string]string, error) {
+		return map[string]string{"alice": material.AccountID}, nil
+	}
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+	saveUsernameIndex = func(map[string]string) error { return nil }
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	storePendingSession(&pendingSession{
+		id:       testSessionID,
+		conn:     clientConn,
+		nodeID:   testJoiningNodeID,
+		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	go respondToFinalizeRequest(t, serverConn)
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+}
+
+func TestLoginReturnsUsernameRequiredError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	if _, err := Login(testSessionID, " ", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want username required failure")
+	}
+}
+
+func TestLoginReturnsUsernameIndexLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	wantErr := errors.New("load index failed")
+	loadUsernameIndex = func() (map[string]string, error) { return nil, wantErr }
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf("Login() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestLoginReturnsMissingUsernameError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{}, nil }
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want username missing failure")
+	}
+}
+
+func TestLoginReturnsBlankAccountMappingError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": " "}, nil }
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want blank account id failure")
+	}
+}
+
+func TestLoginReturnsBlobMissingError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	readManagedFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want blob missing failure")
+	}
+}
+
+func TestLoginReturnsBlobReadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	wantErr := errors.New("read failed")
+	readManagedFile = func(string) ([]byte, error) { return nil, wantErr }
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf("Login() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestLoginReturnsRecoverError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
+	wantErr := errors.New("recover failed")
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return accounts.Material{}, wantErr }
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf("Login() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestLoginReturnsRecoveredAccountMismatchError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
+	recoverAccount = func([]byte, string) (accounts.Material, error) {
+		return accounts.Material{AccountID: "other-account"}, nil
+	}
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want recovered account mismatch")
+	}
+}
+
+func TestLoadUsernameRegistryHandlesReadPaths(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	readManagedFile = func(path string) ([]byte, error) {
+		if path != usernameRegistryPath {
+			t.Fatalf("readManagedFile() path = %q, want %q", path, usernameRegistryPath)
+		}
+		return nil, os.ErrNotExist
+	}
+	registry, err := loadUsernameRegistry()
+	if err != nil {
+		t.Fatalf("loadUsernameRegistry() error = %v", err)
+	}
+	if len(registry) != 0 {
+		t.Fatalf("loadUsernameRegistry() len = %d, want 0", len(registry))
+	}
+
+	readManagedFile = func(string) ([]byte, error) { return []byte(`{"alice":"account-1"}`), nil }
+	registry, err = loadUsernameRegistry()
+	if err != nil {
+		t.Fatalf("loadUsernameRegistry() success-path error = %v", err)
+	}
+	if got := registry["alice"]; got != "account-1" {
+		t.Fatalf("loadUsernameRegistry() registry[alice] = %q, want %q", got, "account-1")
+	}
+
+	readManagedFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
+	if _, err := loadUsernameRegistry(); err == nil {
+		t.Fatal("loadUsernameRegistry() error = nil, want read failure")
+	}
+
+	readManagedFile = func(string) ([]byte, error) { return []byte("{bad"), nil }
+	if _, err := loadUsernameRegistry(); err == nil {
+		t.Fatal("loadUsernameRegistry() error = nil, want unmarshal failure")
+	}
+}
+
+func TestSaveUsernameRegistryPersistsJSON(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	calls := 0
+	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
+		calls++
+		if path != usernameRegistryPath {
+			t.Fatalf("writeManagedFile() path = %q, want %q", path, usernameRegistryPath)
+		}
+		if perm != 0o644 {
+			t.Fatalf("writeManagedFile() perm = %#o, want %#o", perm, 0o644)
+		}
+		if calls == 1 && !strings.Contains(string(data), "\"alice\"") {
+			t.Fatalf("writeManagedFile() data = %s, want username json", string(data))
+		}
+		return nil
+	}
+
+	if err := saveUsernameRegistry(map[string]string{"alice": testAccountID}); err != nil {
+		t.Fatalf("saveUsernameRegistry() error = %v", err)
+	}
+	if err := saveUsernameRegistry(nil); err != nil {
+		t.Fatalf("saveUsernameRegistry(nil) error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("writeManagedFile() calls = %d, want 2", calls)
+	}
+}
+
+func TestSaveUsernameRegistryReturnsWriteError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	wantErr := errors.New("write failed")
+	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
+
+	if err := saveUsernameRegistry(map[string]string{"alice": testAccountID}); !errors.Is(err, wantErr) {
+		t.Fatalf("saveUsernameRegistry() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestValidateCompletionInputsRejectsMissingSessionID(t *testing.T) {
 	if err := validateCompletionInputs("", testAccountPassword); err == nil {
 		t.Fatal("validateCompletionInputs() error = nil, want session id failure")
