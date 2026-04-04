@@ -15,6 +15,8 @@ on:
       - go.mod
       - go.sum
       - build/**
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
   prepare_release:
