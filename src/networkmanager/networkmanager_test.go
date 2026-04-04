@@ -211,6 +211,23 @@ func TestSnapshotExcludesOldTrafficFromCurrentWindow(t *testing.T) {
 	}
 }
 
+func TestRecordReadAndWriteIgnoreZeroOrNegativeCounts(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	recordRead(0)
+	recordRead(-1)
+	recordWrite(0)
+	recordWrite(-1)
+
+	usage := Snapshot()
+	if usage.ReadMbps != 0 || usage.WriteMbps != 0 || usage.TotalReadBytes != 0 || usage.TotalWriteBytes != 0 {
+		t.Fatalf("Snapshot() = %#v, want zero usage", usage)
+	}
+	if len(managerState.transfers) != 0 {
+		t.Fatalf("len(managerState.transfers) = %d, want %d", len(managerState.transfers), 0)
+	}
+}
+
 func TestWrapHelpersReturnNilForNilTargets(t *testing.T) {
 	resetNetworkManagerTestState(t)
 
