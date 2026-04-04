@@ -1,18 +1,25 @@
 package accounts
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"golang.org/x/crypto/scrypt"
 )
 
 const (
 	testNodeID             = "node-123"
+	testAccountID          = "account-123"
 	testPassword           = "secret-pass"
 	testSpacedAccountID    = " account-123 "
 	writePermFormat        = "writeKeyFile() perm = %#o, want %#o"
@@ -318,6 +325,19 @@ func TestValidateBlobRejectsMismatchedAccountID(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 	blob.AccountID = "wrong-account"
+	unsigned := unsignedBlob{
+		AccountID:  blob.AccountID,
+		PublicKey:  blob.PublicKey,
+		KDF:        blob.KDF,
+		Salt:       blob.Salt,
+		Nonce:      blob.Nonce,
+		Ciphertext: blob.Ciphertext,
+	}
+	signature, err := signPayload(privateKey, unsigned)
+	if err != nil {
+		t.Fatalf("signPayload() error = %v", err)
+	}
+	blob.Signature = signature
 	tamperedBlobData, err := json.Marshal(blob)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -328,6 +348,533 @@ func TestValidateBlobRejectsMismatchedAccountID(t *testing.T) {
 	}
 }
 
+func TestDecodePrivateKeyRejectsWrongLength(t *testing.T) {
+	data := []byte(base64.StdEncoding.EncodeToString([]byte("short")))
+
+	if _, err := decodePrivateKey(data); err == nil {
+		t.Fatal("decodePrivateKey() error = nil, want length failure")
+	}
+}
+
+func TestRequiredAccountIDAndValidateAccountPasswordRejectBlank(t *testing.T) {
+	if _, err := requiredAccountID("   "); err == nil {
+		t.Fatal("requiredAccountID() error = nil, want blank account id failure")
+	}
+	if err := validateAccountPassword(" \t "); err == nil {
+		t.Fatal("validateAccountPassword() error = nil, want blank password failure")
+	}
+}
+
+func TestSaveLocalKeyReturnsErrors(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+
+	if _, err := SaveLocalKey("   ", privateKey); err == nil {
+		t.Fatal("SaveLocalKey() error = nil, want blank account id failure")
+	}
+
+	wantErr := errors.New("write failed")
+	writeKeyFile = func(string, []byte, os.FileMode) error {
+		return wantErr
+	}
+	if _, err := SaveLocalKey(testAccountID, privateKey); !errors.Is(err, wantErr) {
+		t.Fatalf("SaveLocalKey() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestGenerateReturnsErrors(t *testing.T) {
+	t.Run("password validation", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		if _, err := Generate(" "); err == nil {
+			t.Fatal("Generate() error = nil, want password validation failure")
+		}
+	})
+
+	t.Run("key generation", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		wantGenerateErr := errors.New("generate failed")
+		generateKeyPair = func(io.Reader) (ed25519.PublicKey, ed25519.PrivateKey, error) {
+			return nil, nil, wantGenerateErr
+		}
+		if _, err := Generate(testPassword); !errors.Is(err, wantGenerateErr) {
+			t.Fatalf("Generate() error = %v, want %v", err, wantGenerateErr)
+		}
+	})
+
+	t.Run("save local key", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		wantWriteErr := errors.New("write failed")
+		writeKeyFile = func(string, []byte, os.FileMode) error {
+			return wantWriteErr
+		}
+		if _, err := Generate(testPassword); !errors.Is(err, wantWriteErr) {
+			t.Fatalf("Generate() error = %v, want %v", err, wantWriteErr)
+		}
+	})
+
+	t.Run("build blob", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		randomReader = errReader{err: errors.New("salt read failed")}
+		if _, err := Generate(testPassword); err == nil {
+			t.Fatal("Generate() error = nil, want blob build failure")
+		}
+	})
+}
+
+func TestRecoverReturnsErrors(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	if _, err := Recover(nil, " "); err == nil {
+		t.Fatal("Recover() error = nil, want password validation failure")
+	}
+	if _, err := Recover([]byte("not-json"), testPassword); err == nil {
+		t.Fatal("Recover() error = nil, want blob validation failure")
+	}
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+
+	mismatchBlobData := buildBlobWithEncryptedKey(t, accountID, publicKey, privateKey, mustGeneratePrivateKey(t), testPassword)
+	if _, err := Recover(mismatchBlobData, testPassword); err == nil {
+		t.Fatal("Recover() error = nil, want decrypted private key mismatch")
+	}
+
+	validBlobData, err := BuildBlob(accountID, publicKey, privateKey, testPassword)
+	if err != nil {
+		t.Fatalf("BuildBlob() error = %v", err)
+	}
+	if _, err := Recover(validBlobData, "wrong-password"); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("Recover() error = %v, want %v", err, ErrInvalidPassword)
+	}
+
+	wantWriteErr := errors.New("write failed")
+	writeKeyFile = func(string, []byte, os.FileMode) error {
+		return wantWriteErr
+	}
+	if _, err := Recover(validBlobData, testPassword); !errors.Is(err, wantWriteErr) {
+		t.Fatalf("Recover() error = %v, want %v", err, wantWriteErr)
+	}
+}
+
+func TestBuildBlobReturnsErrors(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+
+	t.Run("password validation", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		if _, err := BuildBlob(accountID, publicKey, privateKey, " "); err == nil {
+			t.Fatal("BuildBlob() error = nil, want password validation failure")
+		}
+	})
+
+	t.Run("account validation", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		if _, err := BuildBlob(" ", publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want account id validation failure")
+		}
+	})
+
+	t.Run("salt read", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		randomReader = errReader{err: errors.New("salt read failed")}
+		if _, err := BuildBlob(accountID, publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want salt read failure")
+		}
+	})
+
+	t.Run("nonce read", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		randomReader = &scriptedReader{
+			steps: []readStep{
+				{count: blobSaltLength},
+				{err: errors.New("nonce read failed")},
+			},
+		}
+		if _, err := BuildBlob(accountID, publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want nonce read failure")
+		}
+	})
+
+	t.Run("derive key", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		deriveBlobKey = func(string, []byte) ([]byte, error) {
+			return nil, errors.New("derive failed")
+		}
+		if _, err := BuildBlob(accountID, publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want key derivation failure")
+		}
+	})
+
+	t.Run("cipher", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		newAESCipher = func([]byte) (cipher.Block, error) {
+			return nil, errors.New("cipher failed")
+		}
+		if _, err := BuildBlob(accountID, publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want cipher creation failure")
+		}
+	})
+
+	t.Run("gcm", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		newGCM = func(cipher.Block) (cipher.AEAD, error) {
+			return nil, errors.New("gcm failed")
+		}
+		if _, err := BuildBlob(accountID, publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want gcm creation failure")
+		}
+	})
+
+	t.Run("sign", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		signAccountPayload = func(ed25519.PrivateKey, any) (string, error) {
+			return "", errors.New("sign failed")
+		}
+		if _, err := BuildBlob(accountID, publicKey, privateKey, testPassword); err == nil {
+			t.Fatal("BuildBlob() error = nil, want sign failure")
+		}
+	})
+}
+
+func TestDecodePublicKeyFileErrors(t *testing.T) {
+	if _, err := DecodePublicKeyFile([]byte("not-base64")); err == nil {
+		t.Fatal("DecodePublicKeyFile() error = nil, want decode failure")
+	}
+}
+
+func TestBuildMetaDefaultsAndErrors(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+
+	if _, err := BuildMeta(" ", publicKey, "", 0, privateKey); err == nil {
+		t.Fatal("BuildMeta() error = nil, want blank account id failure")
+	}
+
+	currentTime = func() time.Time {
+		return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	}
+	metaData, err := BuildMeta(accountID, publicKey, "", 0, privateKey)
+	if err != nil {
+		t.Fatalf("BuildMeta() error = %v", err)
+	}
+	var meta Meta
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if meta.CreatedAt != "2026-04-03T12:00:00Z" || meta.Revision != 1 || meta.UpdatedAt != "2026-04-03T12:00:00Z" {
+		t.Fatalf("BuildMeta() defaults = %#v, want default timestamp and revision", meta)
+	}
+
+	signAccountPayload = func(ed25519.PrivateKey, any) (string, error) {
+		return "", errors.New("sign failed")
+	}
+	if _, err := BuildMeta(accountID, publicKey, testPassword, 1, privateKey); err == nil {
+		t.Fatal("BuildMeta() error = nil, want sign failure")
+	}
+}
+
+func TestVerifyMetaErrors(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+
+	if _, err := VerifyMeta(accountID, publicKey, []byte("not-json")); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want json failure")
+	}
+
+	metaData, err := BuildMeta(accountID, publicKey, "2026-04-02T00:00:00Z", 1, privateKey)
+	if err != nil {
+		t.Fatalf("BuildMeta() error = %v", err)
+	}
+	var meta Meta
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if _, err := VerifyMeta("other-account", publicKey, metaData); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want account mismatch")
+	}
+
+	meta.AccountID = "other-account"
+	accountMismatchData := mustMarshalJSON(t, meta)
+	if _, err := VerifyMeta(accountID, publicKey, accountMismatchData); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want public key/account mismatch")
+	}
+
+	otherPublicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	if _, err := VerifyMeta(accountID, otherPublicKey, metaData); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want account/public key mismatch")
+	}
+
+	meta = mustDecodeMeta(t, metaData)
+	meta.PublicKey = base64.StdEncoding.EncodeToString(mustGeneratePublicKey(t))
+	publicKeyMismatchData := mustMarshalJSON(t, meta)
+	if _, err := VerifyMeta(accountID, publicKey, publicKeyMismatchData); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want public key mismatch")
+	}
+
+	meta = mustDecodeMeta(t, metaData)
+	meta.Revision = 0
+	revisionData := mustMarshalJSON(t, meta)
+	if _, err := VerifyMeta(accountID, publicKey, revisionData); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want revision failure")
+	}
+
+	meta = mustDecodeMeta(t, metaData)
+	meta.Signature = "bad"
+	badSignatureData := mustMarshalJSON(t, meta)
+	if _, err := VerifyMeta(accountID, publicKey, badSignatureData); err == nil {
+		t.Fatal("VerifyMeta() error = nil, want signature failure")
+	}
+}
+
+func TestVerifyPublicKeyFileErrors(t *testing.T) {
+	if _, err := VerifyPublicKeyFile(testAccountID, []byte("not-base64")); err == nil {
+		t.Fatal("VerifyPublicKeyFile() error = nil, want decode failure")
+	}
+
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	if _, err := VerifyPublicKeyFile("wrong-account", BuildPublicKeyFile(publicKey)); err == nil {
+		t.Fatal("VerifyPublicKeyFile() error = nil, want account mismatch")
+	}
+}
+
+func TestValidateBlobErrors(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+
+	if _, _, err := ValidateBlob([]byte("not-json")); err == nil {
+		t.Fatal("ValidateBlob() error = nil, want json failure")
+	}
+
+	invalidPubKeyBlob := Blob{AccountID: accountID, PublicKey: "not-base64"}
+	if _, _, err := ValidateBlob(mustMarshalJSON(t, invalidPubKeyBlob)); err == nil {
+		t.Fatal("ValidateBlob() error = nil, want public key decode failure")
+	}
+
+	blobData, err := BuildBlob(accountID, publicKey, privateKey, testPassword)
+	if err != nil {
+		t.Fatalf("BuildBlob() error = %v", err)
+	}
+
+	var blob Blob
+	if err := json.Unmarshal(blobData, &blob); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	blob.Signature = "bad"
+	if _, _, err := ValidateBlob(mustMarshalJSON(t, blob)); err == nil {
+		t.Fatal("ValidateBlob() error = nil, want signature failure")
+	}
+
+	blob = mustDecodeBlob(t, blobData)
+	blob.KDF = "argon2id"
+	unsigned := unsignedBlob{
+		AccountID:  blob.AccountID,
+		PublicKey:  blob.PublicKey,
+		KDF:        blob.KDF,
+		Salt:       blob.Salt,
+		Nonce:      blob.Nonce,
+		Ciphertext: blob.Ciphertext,
+	}
+	signature, err := signPayload(privateKey, unsigned)
+	if err != nil {
+		t.Fatalf("signPayload() error = %v", err)
+	}
+	blob.Signature = signature
+	if _, _, err := ValidateBlob(mustMarshalJSON(t, blob)); err == nil {
+		t.Fatal("ValidateBlob() error = nil, want unsupported kdf failure")
+	}
+}
+
+func TestDecryptBlobPrivateKeyErrors(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+	blobData, err := BuildBlob(accountID, publicKey, privateKey, testPassword)
+	if err != nil {
+		t.Fatalf("BuildBlob() error = %v", err)
+	}
+	blob := mustDecodeBlob(t, blobData)
+
+	invalidSalt := blob
+	invalidSalt.Salt = "not-base64"
+	if _, err := decryptBlobPrivateKey(invalidSalt, testPassword); err == nil {
+		t.Fatal("decryptBlobPrivateKey() error = nil, want salt decode failure")
+	}
+
+	invalidNonce := blob
+	invalidNonce.Nonce = "not-base64"
+	if _, err := decryptBlobPrivateKey(invalidNonce, testPassword); err == nil {
+		t.Fatal("decryptBlobPrivateKey() error = nil, want nonce decode failure")
+	}
+
+	invalidCiphertext := blob
+	invalidCiphertext.Ciphertext = "not-base64"
+	if _, err := decryptBlobPrivateKey(invalidCiphertext, testPassword); err == nil {
+		t.Fatal("decryptBlobPrivateKey() error = nil, want ciphertext decode failure")
+	}
+
+	t.Run("derive key", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		deriveBlobKey = func(string, []byte) ([]byte, error) {
+			return nil, errors.New("derive failed")
+		}
+		if _, err := decryptBlobPrivateKey(blob, testPassword); err == nil {
+			t.Fatal("decryptBlobPrivateKey() error = nil, want key derivation failure")
+		}
+	})
+
+	t.Run("cipher", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		newAESCipher = func([]byte) (cipher.Block, error) {
+			return nil, errors.New("cipher failed")
+		}
+		if _, err := decryptBlobPrivateKey(blob, testPassword); err == nil {
+			t.Fatal("decryptBlobPrivateKey() error = nil, want cipher creation failure")
+		}
+	})
+
+	t.Run("gcm", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		newGCM = func(cipher.Block) (cipher.AEAD, error) {
+			return nil, errors.New("gcm failed")
+		}
+		if _, err := decryptBlobPrivateKey(blob, testPassword); err == nil {
+			t.Fatal("decryptBlobPrivateKey() error = nil, want gcm creation failure")
+		}
+	})
+
+	if _, err := decryptBlobPrivateKey(blob, "wrong-password"); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("decryptBlobPrivateKey() error = %v, want %v", err, ErrInvalidPassword)
+	}
+
+	t.Run("decoded private key", func(t *testing.T) {
+		restore := stubAccountHooks(t)
+		defer restore()
+
+		deriveBlobKey = func(string, []byte) ([]byte, error) {
+			return make([]byte, blobKeyLength), nil
+		}
+		newAESCipher = func([]byte) (cipher.Block, error) {
+			return fakeBlock{}, nil
+		}
+		newGCM = func(cipher.Block) (cipher.AEAD, error) {
+			return fakeAEAD{openData: []byte("short")}, nil
+		}
+		if _, err := decryptBlobPrivateKey(blob, testPassword); err == nil {
+			t.Fatal("decryptBlobPrivateKey() error = nil, want private key decode failure")
+		}
+	})
+}
+
+func TestSignAndVerifyHelpersReturnErrors(t *testing.T) {
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+
+	if _, err := signPayload(make(ed25519.PrivateKey, ed25519.PrivateKeySize), func() {}); err == nil {
+		t.Fatal("signPayload() error = nil, want marshal failure")
+	}
+	if err := verifySignature(publicKey, func() {}, ""); err == nil {
+		t.Fatal("verifySignature() error = nil, want marshal failure")
+	}
+	if err := verifySignature(publicKey, map[string]string{"ok": "yes"}, "not-base64"); err == nil {
+		t.Fatal("verifySignature() error = nil, want signature decode failure")
+	}
+	if err := verifySignature(publicKey, map[string]string{"ok": "yes"}, base64.StdEncoding.EncodeToString([]byte("bad"))); err == nil {
+		t.Fatal("verifySignature() error = nil, want invalid signature failure")
+	}
+}
+
+func TestDecodeFixedBase64Errors(t *testing.T) {
+	if _, err := decodeFixedBase64("not-base64", 4); err == nil {
+		t.Fatal("decodeFixedBase64() error = nil, want decode failure")
+	}
+	if _, err := decodeFixedBase64(base64.StdEncoding.EncodeToString([]byte("abc")), 4); err == nil {
+		t.Fatal("decodeFixedBase64() error = nil, want length failure")
+	}
+}
+
+func TestIOReadFullReturnsPartialError(t *testing.T) {
+	buffer := make([]byte, 5)
+	reader := &scriptedReader{
+		steps: []readStep{
+			{count: 3, err: errors.New("read failed")},
+		},
+	}
+
+	total, err := ioReadFull(reader, buffer)
+	if err == nil {
+		t.Fatal("ioReadFull() error = nil, want read failure")
+	}
+	if total != 3 {
+		t.Fatalf("ioReadFull() total = %d, want %d", total, 3)
+	}
+}
+
 func stubAccountHooks(t *testing.T) func() {
 	t.Helper()
 
@@ -335,6 +882,12 @@ func stubAccountHooks(t *testing.T) func() {
 	originalReadKeyFile := readKeyFile
 	originalWriteKeyFile := writeKeyFile
 	originalGenerateKeyPair := generateKeyPair
+	originalRandomReader := randomReader
+	originalCurrentTime := currentTime
+	originalDeriveBlobKey := deriveBlobKey
+	originalNewAESCipher := newAESCipher
+	originalNewGCM := newGCM
+	originalSignAccountPayload := signAccountPayload
 
 	resolveNodeID = func() string { return testNodeID }
 	readKeyFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
@@ -342,11 +895,171 @@ func stubAccountHooks(t *testing.T) func() {
 	generateKeyPair = func(io.Reader) (ed25519.PublicKey, ed25519.PrivateKey, error) {
 		return ed25519.GenerateKey(rand.Reader)
 	}
+	randomReader = rand.Reader
+	currentTime = time.Now
+	deriveBlobKey = func(password string, salt []byte) ([]byte, error) {
+		return scrypt.Key([]byte(password), salt, blobN, blobR, blobP, blobKeyLength)
+	}
+	newAESCipher = aes.NewCipher
+	newGCM = cipher.NewGCM
+	signAccountPayload = signPayload
 
 	return func() {
 		resolveNodeID = originalResolveNodeID
 		readKeyFile = originalReadKeyFile
 		writeKeyFile = originalWriteKeyFile
 		generateKeyPair = originalGenerateKeyPair
+		randomReader = originalRandomReader
+		currentTime = originalCurrentTime
+		deriveBlobKey = originalDeriveBlobKey
+		newAESCipher = originalNewAESCipher
+		newGCM = originalNewGCM
+		signAccountPayload = originalSignAccountPayload
 	}
+}
+
+type readStep struct {
+	count int
+	err   error
+}
+
+type scriptedReader struct {
+	steps []readStep
+	index int
+}
+
+func (r *scriptedReader) Read(buffer []byte) (int, error) {
+	if r.index >= len(r.steps) {
+		return 0, io.EOF
+	}
+
+	step := r.steps[r.index]
+	r.index++
+	for i := 0; i < step.count && i < len(buffer); i++ {
+		buffer[i] = byte(i + 1)
+	}
+
+	return step.count, step.err
+}
+
+type errReader struct {
+	err error
+}
+
+func (r errReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+type fakeBlock struct{}
+
+func (fakeBlock) BlockSize() int          { return aes.BlockSize }
+func (fakeBlock) Encrypt(dst, src []byte) { copy(dst, src) }
+func (fakeBlock) Decrypt(dst, src []byte) { copy(dst, src) }
+
+type fakeAEAD struct {
+	openData []byte
+	openErr  error
+}
+
+func (f fakeAEAD) NonceSize() int { return blobNonceLength }
+func (f fakeAEAD) Overhead() int  { return 0 }
+func (f fakeAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
+	return append(dst, plaintext...)
+}
+func (f fakeAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
+	return append(dst, f.openData...), nil
+}
+
+func mustGeneratePrivateKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	return privateKey
+}
+
+func mustGeneratePublicKey(t *testing.T) ed25519.PublicKey {
+	t.Helper()
+
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	return publicKey
+}
+
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	return data
+}
+
+func mustDecodeBlob(t *testing.T, data []byte) Blob {
+	t.Helper()
+
+	var blob Blob
+	if err := json.Unmarshal(data, &blob); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	return blob
+}
+
+func mustDecodeMeta(t *testing.T, data []byte) Meta {
+	t.Helper()
+
+	var meta Meta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	return meta
+}
+
+func buildBlobWithEncryptedKey(t *testing.T, accountID string, publicKey ed25519.PublicKey, signingKey ed25519.PrivateKey, encryptedKey ed25519.PrivateKey, password string) []byte {
+	t.Helper()
+
+	salt := []byte("0123456789abcdef")
+	nonce := []byte("0123456789ab")
+	key, err := scrypt.Key([]byte(password), salt, blobN, blobR, blobP, blobKeyLength)
+	if err != nil {
+		t.Fatalf("scrypt.Key() error = %v", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("aes.NewCipher() error = %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("cipher.NewGCM() error = %v", err)
+	}
+	unsigned := unsignedBlob{
+		AccountID:  accountID,
+		PublicKey:  base64.StdEncoding.EncodeToString(publicKey),
+		KDF:        blobKDFName,
+		Salt:       base64.StdEncoding.EncodeToString(salt),
+		Nonce:      base64.StdEncoding.EncodeToString(nonce),
+		Ciphertext: base64.StdEncoding.EncodeToString(gcm.Seal(nil, nonce, encodePrivateKey(encryptedKey), nil)),
+	}
+	signature, err := signPayload(signingKey, unsigned)
+	if err != nil {
+		t.Fatalf("signPayload() error = %v", err)
+	}
+
+	return mustMarshalJSON(t, Blob{
+		AccountID:  unsigned.AccountID,
+		PublicKey:  unsigned.PublicKey,
+		KDF:        unsigned.KDF,
+		Salt:       unsigned.Salt,
+		Nonce:      unsigned.Nonce,
+		Ciphertext: unsigned.Ciphertext,
+		Signature:  signature,
+	})
 }

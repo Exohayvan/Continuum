@@ -47,8 +47,9 @@ var (
 	deriveBlobKey   = func(password string, salt []byte) ([]byte, error) {
 		return scrypt.Key([]byte(password), salt, blobN, blobR, blobP, blobKeyLength)
 	}
-	newAESCipher = aes.NewCipher
-	newGCM       = cipher.NewGCM
+	newAESCipher       = aes.NewCipher
+	newGCM             = cipher.NewGCM
+	signAccountPayload = signPayload
 )
 
 var ErrInvalidPassword = errors.New("invalid account password")
@@ -322,7 +323,7 @@ func BuildBlob(accountID string, publicKey ed25519.PublicKey, privateKey ed25519
 		Nonce:      base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
 	}
-	signature, err := signPayload(privateKey, unsigned)
+	signature, err := signAccountPayload(privateKey, unsigned)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +376,7 @@ func BuildMeta(accountID string, publicKey ed25519.PublicKey, createdAt string, 
 		Revision:  revision,
 		UpdatedAt: currentTime().UTC().Format(time.RFC3339),
 	}
-	signature, err := signPayload(privateKey, unsigned)
+	signature, err := signAccountPayload(privateKey, unsigned)
 	if err != nil {
 		return nil, err
 	}
