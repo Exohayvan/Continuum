@@ -74,6 +74,7 @@ const (
 	startFailedText                = "start failed"
 	openBinaryPath                 = "/usr/bin/open"
 	resolveUpdateAssetErrorFormat  = "resolveUpdateAsset() error = %v"
+	exitStatusErrorText            = "exit status 1"
 )
 
 func applicationsDirPath() string {
@@ -976,7 +977,7 @@ func TestReplaceAppBundleQuarantineClearFailureRestoresPreviousBundle(t *testing
 		return xattrBinaryPath, nil
 	}
 	runCommandOutput = func(string, ...string) ([]byte, error) {
-		return []byte("operation not permitted"), fmt.Errorf("exit status 1")
+		return []byte("operation not permitted"), fmt.Errorf(exitStatusErrorText)
 	}
 
 	root := t.TempDir()
@@ -1020,7 +1021,7 @@ func TestReplaceAppBundleQuarantineClearFailureRestoreError(t *testing.T) {
 		return xattrBinaryPath, nil
 	}
 	runCommandOutput = func(string, ...string) ([]byte, error) {
-		return []byte("operation not permitted"), fmt.Errorf("exit status 1")
+		return []byte("operation not permitted"), fmt.Errorf(exitStatusErrorText)
 	}
 
 	root := t.TempDir()
@@ -1187,7 +1188,7 @@ func TestClearBundleQuarantineIgnoresMissingAttribute(t *testing.T) {
 		return xattrBinaryPath, nil
 	}
 	runCommandOutput = func(string, ...string) ([]byte, error) {
-		return []byte("No such xattr: com.apple.quarantine"), fmt.Errorf("exit status 1")
+		return []byte("No such xattr: com.apple.quarantine"), fmt.Errorf(exitStatusErrorText)
 	}
 
 	if err := clearBundleQuarantine(applicationsAppBundlePath()); err != nil {
@@ -1200,7 +1201,7 @@ func TestClearBundleQuarantineReturnsRawErrorWithoutOutput(t *testing.T) {
 	defer restore()
 
 	hostGOOS = "darwin"
-	wantErr := fmt.Errorf("exit status 1")
+	wantErr := fmt.Errorf(exitStatusErrorText)
 	lookPath = func(string) (string, error) {
 		return xattrBinaryPath, nil
 	}
