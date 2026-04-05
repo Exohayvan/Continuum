@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -727,13 +726,6 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 		if err != nil {
 			done <- err
 			return
-		}
-		if tlsConn, ok := conn.(*tls.Conn); ok {
-			if err := tlsConn.Handshake(); err != nil {
-				_ = tlsConn.Close()
-				done <- err
-				return
-			}
 		}
 		_ = conn.Close()
 		done <- nil

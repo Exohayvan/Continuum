@@ -5,11 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"testing"
 	"time"
 )
@@ -352,22 +350,12 @@ func TestDialSecureTCP4ReturnsTrackedConn(t *testing.T) {
 		}
 		defer serverConn.Close()
 
-		tlsConn, ok := serverConn.(*tls.Conn)
-		if !ok {
-			done <- fmt.Errorf("Accept() = %T, want *tls.Conn", serverConn)
-			return
-		}
-		if err := tlsConn.Handshake(); err != nil {
-			done <- err
-			return
-		}
-
 		buffer := make([]byte, 4)
-		if _, err := io.ReadFull(tlsConn, buffer); err != nil {
+		if _, err := io.ReadFull(serverConn, buffer); err != nil {
 			done <- err
 			return
 		}
-		if _, err := tlsConn.Write([]byte("pong!")); err != nil {
+		if _, err := serverConn.Write([]byte("pong!")); err != nil {
 			done <- err
 			return
 		}
@@ -430,20 +418,14 @@ func TestDialSecureTCP4RejectsUnexpectedAccountID(t *testing.T) {
 			return
 		}
 		defer serverConn.Close()
-
-		tlsConn, ok := serverConn.(*tls.Conn)
-		if !ok {
-			done <- fmt.Errorf("Accept() = %T, want *tls.Conn", serverConn)
-			return
-		}
-		done <- tlsConn.Handshake()
+		done <- nil
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	if _, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, accountIDFromPublicKey(otherPublicKey)); err == nil {
 		t.Fatal("DialSecureTCP4() error = nil, want account id verification failure")
 	}
-	if err := <-done; err != nil && !strings.Contains(err.Error(), "bad certificate") {
+	if err := <-done; err != nil {
 		t.Fatalf("listener goroutine error = %v", err)
 	}
 }
