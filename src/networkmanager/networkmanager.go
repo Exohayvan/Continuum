@@ -1,6 +1,8 @@
 package networkmanager
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -50,9 +52,36 @@ type trackedConn struct {
 	net.Conn
 }
 
+type trackedListener struct {
+	net.Listener
+}
+
 // Snapshot returns the current one-second throughput window plus lifetime totals.
 func Snapshot() Usage {
 	return managerState.snapshot(currentTime())
+}
+
+// DialTCP4 opens a tracked tcp4 connection.
+func DialTCP4(ctx context.Context, host string, port int) (net.Conn, error) {
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp4", address)
+	if err != nil {
+		return nil, err
+	}
+
+	return WrapConn(conn), nil
+}
+
+// ListenTCP4 opens a tracked tcp4 listener whose accepted connections are tracked.
+func ListenTCP4(port int) (net.Listener, error) {
+	address := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port))
+	listener, err := net.Listen("tcp4", address)
+	if err != nil {
+		return nil, err
+	}
+
+	return trackedListener{Listener: listener}, nil
 }
 
 // WrapReadWriter returns a wrapper that records bytes read and written.
@@ -122,6 +151,15 @@ func (w trackedConn) Write(buffer []byte) (int, error) {
 	count, err := w.Conn.Write(buffer)
 	recordWrite(count)
 	return count, err
+}
+
+func (w trackedListener) Accept() (net.Conn, error) {
+	conn, err := w.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+
+	return WrapConn(conn), nil
 }
 
 func recordRead(count int) {

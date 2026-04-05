@@ -255,7 +255,6 @@ var (
 	probeEndpoint     = measureEndpointLatency
 	dialBootstrap     = dialBootstrapEndpoint
 	listenBootstrap   = listenBootstrapEndpoint
-	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords   = loadExistingNodeRecords
 	loadUsernameIndex = loadUsernameIndexCache
 	saveUsernameIndex = saveUsernameIndexCache
@@ -496,7 +495,6 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 	if err != nil {
 		return ConnectResult{}, err
 	}
-	conn = wrapBootstrapConn(conn)
 
 	if err := conn.SetDeadline(currentTime().Add(bootstrapSessionTTL)); err != nil {
 		conn.Close()
@@ -1124,7 +1122,7 @@ func startBootstrapService(ctx context.Context) error {
 			return err
 		}
 
-		go handleBootstrapConnection(wrapBootstrapConn(conn))
+		go handleBootstrapConnection(conn)
 	}
 }
 
@@ -1907,14 +1905,11 @@ func accountMetaRelativePath(accountID string) string {
 }
 
 func dialBootstrapEndpoint(ctx context.Context, host string, port int) (net.Conn, error) {
-	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	dialer := net.Dialer{}
-	return dialer.DialContext(ctx, "tcp4", address)
+	return networkmanager.DialTCP4(ctx, host, port)
 }
 
 func listenBootstrapEndpoint(port int) (net.Listener, error) {
-	address := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port))
-	return net.Listen("tcp4", address)
+	return networkmanager.ListenTCP4(port)
 }
 
 func storePendingSession(session *pendingSession) {
