@@ -784,6 +784,10 @@ func finalizeCompletion(sessionID string, session *pendingSession, material acco
 		return ConnectResult{}, err
 	}
 
+	if err := finalizeBootstrapSession(sessionID, session, material, artifacts); err != nil {
+		return ConnectResult{}, err
+	}
+
 	peerPath, metaPath, accountBlobPath, err := writeNetworkFiles(
 		session.nodeID,
 		material.AccountID,
@@ -794,10 +798,6 @@ func finalizeCompletion(sessionID string, session *pendingSession, material acco
 		artifacts.accountMetaData,
 	)
 	if err != nil {
-		return ConnectResult{}, err
-	}
-
-	if err := finalizeBootstrapSession(sessionID, session, material, artifacts); err != nil {
 		return ConnectResult{}, err
 	}
 

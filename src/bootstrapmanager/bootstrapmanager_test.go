@@ -1130,6 +1130,9 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 
 	writtenFiles := map[string][]byte{}
 	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
+		if _, ok := getPendingSession(testSessionID); ok {
+			t.Fatal("writeManagedFile() called before finalizeBootstrapSession() completed")
+		}
 		writtenFiles[path] = append([]byte(nil), data...)
 		return nil
 	}
@@ -2231,9 +2234,11 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 		return errors.New(testWriteFailedText)
 	}
 
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
 	session := &pendingSession{
 		id:     testSessionID,
-		conn:   &stubConn{},
+		conn:   clientConn,
 		nodeID: testJoiningNodeID,
 		response: bootstrapSessionStartResponse{
 			ObservedIPv4: testBootstrapHost,
@@ -2244,6 +2249,7 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
+	go respondToFinalizeRequest(t, serverConn)
 
 	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testWriteFailedText {
 		t.Fatalf(testCompleteWantErrorFormat, err, testWriteFailedText)
@@ -2746,8 +2752,10 @@ func TestRegisterReturnsFinalizeError(t *testing.T) {
 	material := testBootstrapMaterial(t)
 	createAccount = func(string) (accounts.Material, error) { return material, nil }
 	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
-	wantErr := errors.New(testWriteFailedText)
-	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
+	writeManagedFile = func(string, []byte, os.FileMode) error {
+		t.Fatal("writeManagedFile() called during finalize failure")
+		return nil
+	}
 	saveUsernameIndex = func(usernameIndex) error {
 		t.Fatal("saveUsernameIndex() called during finalize failure")
 		return nil
@@ -2758,7 +2766,7 @@ func TestRegisterReturnsFinalizeError(t *testing.T) {
 	}
 	storePendingSession(&pendingSession{
 		id:       testSessionID,
-		conn:     &stubConn{},
+		conn:     &stubConn{readData: mustMarshalJSON(t, bootstrapSessionFinalizeResponse{Error: testFinalizeFailedText})},
 		nodeID:   testJoiningNodeID,
 		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
 	})
@@ -2766,8 +2774,8 @@ func TestRegisterReturnsFinalizeError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 
-	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
+	if _, err := Register(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != testFinalizeFailedText {
+		t.Fatalf(testRegisterWantErrorFormat, err, testFinalizeFailedText)
 	}
 }
 
