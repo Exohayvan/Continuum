@@ -430,6 +430,71 @@ func TestDialSecureTCP4RejectsUnexpectedAccountID(t *testing.T) {
 	}
 }
 
+func TestListenSecureTCP4IgnoresPlainTCPProbe(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	listener, err := ListenSecureTCP4(0, privateKey)
+	if err != nil {
+		t.Fatalf("ListenSecureTCP4() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		serverConn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer serverConn.Close()
+
+		buffer := make([]byte, 4)
+		if _, err := io.ReadFull(serverConn, buffer); err != nil {
+			done <- err
+			return
+		}
+		if _, err := serverConn.Write([]byte("pong")); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	probeConn, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port)))
+	if err != nil {
+		t.Fatalf("net.Dial() probe error = %v", err)
+	}
+	if err := probeConn.Close(); err != nil {
+		t.Fatalf("probeConn.Close() error = %v", err)
+	}
+
+	conn, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, accountIDFromPublicKey(publicKey))
+	if err != nil {
+		t.Fatalf("DialSecureTCP4() error = %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf(writeErrorFormat, err)
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		t.Fatalf(readErrorFormat, err)
+	}
+	if !bytes.Equal(reply, []byte("pong")) {
+		t.Fatalf("reply = %q, want %q", reply, "pong")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("listener goroutine error = %v", err)
+	}
+}
+
 func TestListenSecureTCP4ReturnsInvalidKeyError(t *testing.T) {
 	resetNetworkManagerTestState(t)
 

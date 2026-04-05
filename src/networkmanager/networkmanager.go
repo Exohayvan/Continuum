@@ -248,19 +248,21 @@ func (w trackedListener) Accept() (net.Conn, error) {
 }
 
 func (w trackedSecureListener) Accept() (net.Conn, error) {
-	conn, err := w.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
+	for {
+		conn, err := w.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
 
-	trackedConn := WrapConn(conn)
-	secureConn, err := serverSecureConn(trackedConn, w.privateKey)
-	if err != nil {
-		_ = trackedConn.Close()
-		return nil, err
-	}
+		trackedConn := WrapConn(conn)
+		secureConn, err := serverSecureConn(trackedConn, w.privateKey)
+		if err != nil {
+			_ = trackedConn.Close()
+			continue
+		}
 
-	return secureConn, nil
+		return secureConn, nil
+	}
 }
 
 func dialTCP4(ctx context.Context, host string, port int) (net.Conn, error) {

@@ -317,6 +317,17 @@ func LoadState() State {
 	}
 }
 
+// LocalNodeFirstSeen returns the stored first-seen timestamp from the local
+// verified node metadata when this node has already joined the network.
+func LocalNodeFirstSeen() (string, error) {
+	records, err := loadNodeRecords(resolveNodeID())
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(records.NodeMeta.FirstSeen), nil
+}
+
 func peerFileCount(peersPath string) (int, error) {
 	entries, err := readDirectory(peersPath)
 	if err != nil {

@@ -237,6 +237,49 @@ func TestLoadStateFetchesAndSortsBootstrapNodes(t *testing.T) {
 	}
 }
 
+func TestLocalNodeFirstSeenReturnsVerifiedNodeMetaTimestamp(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testJoiningNodeID }
+	loadNodeRecords = func(nodeID string) (existingNodeRecords, error) {
+		if nodeID != testJoiningNodeID {
+			t.Fatalf("loadNodeRecords() nodeID = %q, want %q", nodeID, testJoiningNodeID)
+		}
+
+		return existingNodeRecords{
+			KnownNode: true,
+			NodeMeta: metaFile{
+				FirstSeen: testBootstrapTimestamp,
+			},
+		}, nil
+	}
+
+	got, err := LocalNodeFirstSeen()
+	if err != nil {
+		t.Fatalf("LocalNodeFirstSeen() error = %v", err)
+	}
+	if got != testBootstrapTimestamp {
+		t.Fatalf("LocalNodeFirstSeen() = %q, want %q", got, testBootstrapTimestamp)
+	}
+}
+
+func TestLocalNodeFirstSeenReturnsLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testJoiningNodeID }
+	wantErr := errors.New(testLoadFailedText)
+	loadNodeRecords = func(string) (existingNodeRecords, error) {
+		return existingNodeRecords{}, wantErr
+	}
+
+	_, err := LocalNodeFirstSeen()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("LocalNodeFirstSeen() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
