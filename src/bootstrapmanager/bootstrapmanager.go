@@ -36,7 +36,7 @@ const (
 	DefaultPort            = 58103
 	bootstrapSessionTTL    = 2 * time.Minute
 	bootstrapSessionIDSize = 16
-	usernameRegistryPath   = "network/accounts/usernames.json"
+	usernameIndexPath      = "cache/username-index.map"
 )
 
 type Node struct {
@@ -143,6 +143,7 @@ type bootstrapSessionStartResponse struct {
 	Reachable         bool   `json:"reachable"`
 	RecoveryAvailable bool   `json:"recoveryAvailable"`
 	AccountID         string `json:"accountId"`
+	UsernameHash      string `json:"usernameHash,omitempty"`
 	AccountBlob       []byte `json:"accountBlob,omitempty"`
 	FirstSeen         string `json:"firstSeen"`
 	Revision          int    `json:"revision"`
@@ -185,6 +186,8 @@ type existingNodeRecords struct {
 	KnownNode     bool
 }
 
+type usernameIndex map[string][]string
+
 func (file *metaFile) UnmarshalJSON(data []byte) error {
 	type metaFileAlias metaFile
 
@@ -215,6 +218,7 @@ var (
 	resolveNodeID     = nodeid.GetNodeID
 	createAccount     = accounts.Generate
 	recoverAccount    = accounts.Recover
+	saveLocalProfile  = accounts.SaveLocalProfile
 	httpClient        = &http.Client{Timeout: 5 * time.Second}
 	fetchRemoteList   = fetchRemoteBootstrapList
 	probeEndpoint     = measureEndpointLatency
@@ -222,8 +226,8 @@ var (
 	listenBootstrap   = listenBootstrapEndpoint
 	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords   = loadExistingNodeRecords
-	loadUsernameIndex = loadUsernameRegistry
-	saveUsernameIndex = saveUsernameRegistry
+	loadUsernameIndex = loadUsernameIndexCache
+	saveUsernameIndex = saveUsernameIndexCache
 	currentTime       = time.Now
 	scheduleAfter     = time.AfterFunc
 	signPeerOrMeta    = signPayload
@@ -538,7 +542,7 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 		return ConnectResult{}, err
 	}
 
-	return finalizeCompletion(sessionID, session, material)
+	return finalizeCompletion(sessionID, session, material, "")
 }
 
 func Recover(sessionID, password string) (ConnectResult, error) {
@@ -554,6 +558,7 @@ func Register(sessionID, username, password string) (ConnectResult, error) {
 	if err != nil {
 		return ConnectResult{}, err
 	}
+	usernameHash := accounts.UsernameHash(normalizedUsername)
 
 	session, err := pendingSessionForCompletion(sessionID)
 	if err != nil {
@@ -565,21 +570,24 @@ func Register(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, err
 	}
 
-	registry, err := loadUsernameIndex()
+	index, err := loadUsernameIndex()
 	if err != nil {
 		return ConnectResult{}, err
 	}
 
-	if existingAccountID, exists := registry[normalizedUsername]; exists && existingAccountID != material.AccountID {
+	if existingAccountIDs := index.accountIDsForHash(usernameHash); len(existingAccountIDs) > 0 && !containsAccountID(existingAccountIDs, material.AccountID) {
 		return ConnectResult{}, errors.New("username already exists")
 	}
-	registry[normalizedUsername] = material.AccountID
 
-	result, err := finalizeCompletion(sessionID, session, material)
+	result, err := finalizeCompletion(sessionID, session, material, usernameHash)
 	if err != nil {
 		return ConnectResult{}, err
 	}
-	if err := saveUsernameIndex(registry); err != nil {
+	index.add(usernameHash, material.AccountID)
+	if err := saveUsernameIndex(index); err != nil {
+		return ConnectResult{}, err
+	}
+	if _, err := saveLocalProfile(material.AccountID, normalizedUsername); err != nil {
 		return ConnectResult{}, err
 	}
 	result.Message = fmt.Sprintf("Registered %s with account %s. %s", normalizedUsername, material.AccountID, result.Message)
@@ -595,21 +603,26 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 	if err != nil {
 		return ConnectResult{}, err
 	}
+	usernameHash := accounts.UsernameHash(normalizedUsername)
 
 	session, err := pendingSessionForCompletion(sessionID)
 	if err != nil {
 		return ConnectResult{}, err
 	}
 
-	registry, err := loadUsernameIndex()
+	index, err := loadUsernameIndex()
 	if err != nil {
 		return ConnectResult{}, err
 	}
 
-	accountID, exists := registry[normalizedUsername]
-	if !exists || strings.TrimSpace(accountID) == "" {
+	accountIDs := index.accountIDsForHash(usernameHash)
+	if len(accountIDs) == 0 {
 		return ConnectResult{}, errors.New("username does not exist")
 	}
+	if len(accountIDs) > 1 {
+		return ConnectResult{}, errors.New("username matches multiple accounts")
+	}
+	accountID := accountIDs[0]
 
 	blobData, err := readManagedFile(accountBlobRelativePath(accountID))
 	if err != nil {
@@ -627,16 +640,23 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, errors.New("username account mapping does not match recovered account")
 	}
 
-	result, err := finalizeCompletion(sessionID, session, material)
+	result, err := finalizeCompletion(sessionID, session, material, usernameHash)
 	if err != nil {
+		return ConnectResult{}, err
+	}
+	index.add(usernameHash, material.AccountID)
+	if err := saveUsernameIndex(index); err != nil {
+		return ConnectResult{}, err
+	}
+	if _, err := saveLocalProfile(material.AccountID, normalizedUsername); err != nil {
 		return ConnectResult{}, err
 	}
 	result.Message = fmt.Sprintf("Logged in as %s (%s). %s", normalizedUsername, material.AccountID, result.Message)
 	return result, nil
 }
 
-func finalizeCompletion(sessionID string, session *pendingSession, material accounts.Material) (ConnectResult, error) {
-	artifacts, err := buildCompletionArtifacts(session, material)
+func finalizeCompletion(sessionID string, session *pendingSession, material accounts.Material, usernameHash string) (ConnectResult, error) {
+	artifacts, err := buildCompletionArtifacts(session, material, usernameHash)
 	if err != nil {
 		return ConnectResult{}, err
 	}
@@ -670,35 +690,94 @@ func normalizeUsername(username string) (string, error) {
 	return normalized, nil
 }
 
-func loadUsernameRegistry() (map[string]string, error) {
-	data, err := readManagedFile(usernameRegistryPath)
+func (index usernameIndex) accountIDsForHash(usernameHash string) []string {
+	usernameHash = strings.TrimSpace(usernameHash)
+	if usernameHash == "" {
+		return nil
+	}
+
+	accountIDs := index[usernameHash]
+	if len(accountIDs) == 0 {
+		return nil
+	}
+
+	deduped := make([]string, 0, len(accountIDs))
+	seen := map[string]struct{}{}
+	for _, accountID := range accountIDs {
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			continue
+		}
+		if _, exists := seen[accountID]; exists {
+			continue
+		}
+		seen[accountID] = struct{}{}
+		deduped = append(deduped, accountID)
+	}
+
+	return deduped
+}
+
+func (index usernameIndex) add(usernameHash, accountID string) {
+	if index == nil {
+		return
+	}
+
+	usernameHash = strings.TrimSpace(usernameHash)
+	accountID = strings.TrimSpace(accountID)
+	if usernameHash == "" || accountID == "" {
+		return
+	}
+
+	for _, existing := range index[usernameHash] {
+		if strings.TrimSpace(existing) == accountID {
+			return
+		}
+	}
+
+	index[usernameHash] = append(index[usernameHash], accountID)
+}
+
+func containsAccountID(accountIDs []string, accountID string) bool {
+	accountID = strings.TrimSpace(accountID)
+	for _, existing := range accountIDs {
+		if strings.TrimSpace(existing) == accountID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func loadUsernameIndexCache() (usernameIndex, error) {
+	data, err := readManagedFile(usernameIndexPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return map[string]string{}, nil
+			return usernameIndex{}, nil
 		}
 
 		return nil, err
 	}
 
-	registry := map[string]string{}
-	if err := json.Unmarshal(data, &registry); err != nil {
+	index := usernameIndex{}
+	if err := json.Unmarshal(data, &index); err != nil {
 		return nil, err
 	}
 
-	return registry, nil
+	return index, nil
 }
 
-func saveUsernameRegistry(registry map[string]string) error {
-	if registry == nil {
-		registry = map[string]string{}
+func saveUsernameIndexCache(index usernameIndex) error {
+	if index == nil {
+		index = usernameIndex{}
 	}
 
-	data, err := json.MarshalIndent(registry, "", "  ")
+	data, err := json.MarshalIndent(index, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	return writeManagedFile(usernameRegistryPath, data, 0o644)
+	return writeManagedFile(usernameIndexPath, data, 0o644)
 }
 
 type completionArtifacts struct {
@@ -743,8 +822,11 @@ func completionMaterial(response bootstrapSessionStartResponse, password string)
 	return createAccount(password)
 }
 
-func buildCompletionArtifacts(session *pendingSession, material accounts.Material) (completionArtifacts, error) {
+func buildCompletionArtifacts(session *pendingSession, material accounts.Material, usernameHash string) (completionArtifacts, error) {
 	state := normalizeCompletionState(session.response)
+	if strings.TrimSpace(usernameHash) == "" {
+		usernameHash = strings.TrimSpace(session.response.UsernameHash)
+	}
 
 	peerData, err := buildPeerFile(session.response.ObservedIPv4, session.response.Port, material.AccountID, material.PrivateKey)
 	if err != nil {
@@ -755,7 +837,7 @@ func buildCompletionArtifacts(session *pendingSession, material accounts.Materia
 		return completionArtifacts{}, err
 	}
 	accountPubKeyData := accounts.BuildPublicKeyFile(material.PublicKey)
-	accountMetaData, err := accounts.BuildMeta(material.AccountID, material.PublicKey, state.accountCreatedAt, state.accountRevision, material.PrivateKey)
+	accountMetaData, err := accounts.BuildMetaWithUsernameHash(material.AccountID, material.PublicKey, state.accountCreatedAt, state.accountRevision, usernameHash, material.PrivateKey)
 	if err != nil {
 		return completionArtifacts{}, err
 	}
@@ -1010,6 +1092,9 @@ func buildBootstrapStartResponse(remoteAddr net.Addr, request bootstrapSessionSt
 	}
 	if existingRecords.AccountMeta.Revision > 0 {
 		response.AccountRevision = existingRecords.AccountMeta.Revision + 1
+	}
+	if strings.TrimSpace(existingRecords.AccountMeta.UsernameHash) != "" {
+		response.UsernameHash = existingRecords.AccountMeta.UsernameHash
 	}
 	if strings.TrimSpace(existingRecords.NodeMeta.AccountID) != "" && len(existingRecords.AccountBlob) > 0 {
 		response.RecoveryAvailable = true

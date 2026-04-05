@@ -1510,8 +1510,8 @@ func TestRegisterRejectsDuplicateUsername(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 
-	loadUsernameIndex = func() (map[string]string, error) {
-		return map[string]string{"alice": "account-existing"}, nil
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {"account-existing"}}, nil
 	}
 	createAccount = func(string) (accounts.Material, error) {
 		return accounts.Material{AccountID: "account-new"}, nil
@@ -1528,15 +1528,21 @@ func TestRegisterSavesUsernameIndexAfterFinalize(t *testing.T) {
 
 	material := testBootstrapMaterial(t)
 	createAccount = func(string) (accounts.Material, error) { return material, nil }
-	loadUsernameIndex = func() (map[string]string, error) {
-		return map[string]string{}, nil
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{}, nil
 	}
-	saved := map[string]string{}
-	saveUsernameIndex = func(registry map[string]string) error {
-		for key, value := range registry {
-			saved[key] = value
+	saved := usernameIndex{}
+	saveUsernameIndex = func(index usernameIndex) error {
+		for key, value := range index {
+			saved[key] = append([]string(nil), value...)
 		}
 		return nil
+	}
+	saveLocalProfile = func(accountID, username string) (string, error) {
+		if accountID != material.AccountID || username != "alice" {
+			t.Fatalf("saveLocalProfile() args = (%q, %q), want (%q, %q)", accountID, username, material.AccountID, "alice")
+		}
+		return filepath.Join("local", "account", material.AccountID+".profile"), nil
 	}
 	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
 
@@ -1561,8 +1567,9 @@ func TestRegisterSavesUsernameIndexAfterFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	if got := saved["alice"]; got != material.AccountID {
-		t.Fatalf("saved username index account = %q, want %q", got, material.AccountID)
+	savedAccounts := saved.accountIDsForHash(accounts.UsernameHash("alice"))
+	if len(savedAccounts) != 1 || savedAccounts[0] != material.AccountID {
+		t.Fatalf("saved username index account ids = %#v, want [%q]", savedAccounts, material.AccountID)
 	}
 	if !strings.Contains(result.Message, "Registered alice") {
 		t.Fatalf("Register() message = %q, want username confirmation", result.Message)
@@ -1574,8 +1581,8 @@ func TestLoginUsesUsernameIndexAndBlob(t *testing.T) {
 	defer restore()
 
 	material := testBootstrapMaterial(t)
-	loadUsernameIndex = func() (map[string]string, error) {
-		return map[string]string{"alice": material.AccountID}, nil
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {material.AccountID}}, nil
 	}
 	recoverAccount = func(blobData []byte, password string) (accounts.Material, error) {
 		if string(blobData) != `{"blob":"data"}` || password != testAccountPassword {
@@ -1588,6 +1595,19 @@ func TestLoginUsesUsernameIndexAndBlob(t *testing.T) {
 			return []byte(`{"blob":"data"}`), nil
 		}
 		return nil, os.ErrNotExist
+	}
+	saveUsernameIndex = func(index usernameIndex) error {
+		accountIDs := index.accountIDsForHash(accounts.UsernameHash("alice"))
+		if len(accountIDs) != 1 || accountIDs[0] != material.AccountID {
+			t.Fatalf("saveUsernameIndex() account ids = %#v, want [%q]", accountIDs, material.AccountID)
+		}
+		return nil
+	}
+	saveLocalProfile = func(accountID, username string) (string, error) {
+		if accountID != material.AccountID || username != "alice" {
+			t.Fatalf("saveLocalProfile() args = (%q, %q), want (%q, %q)", accountID, username, material.AccountID, "alice")
+		}
+		return filepath.Join("local", "account", material.AccountID+".profile"), nil
 	}
 	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
 
@@ -1699,7 +1719,7 @@ func TestRegisterReturnsUsernameIndexLoadError(t *testing.T) {
 		return accounts.Material{AccountID: testAccountID}, nil
 	}
 	wantErr := errors.New("load index failed")
-	loadUsernameIndex = func() (map[string]string, error) { return nil, wantErr }
+	loadUsernameIndex = func() (usernameIndex, error) { return nil, wantErr }
 
 	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
 		t.Fatalf("Register() error = %v, want %v", err, wantErr)
@@ -1712,10 +1732,10 @@ func TestRegisterReturnsUsernameIndexSaveError(t *testing.T) {
 
 	material := testBootstrapMaterial(t)
 	createAccount = func(string) (accounts.Material, error) { return material, nil }
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
 	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
 	wantErr := errors.New("save index failed")
-	saveUsernameIndex = func(map[string]string) error { return wantErr }
+	saveUsernameIndex = func(usernameIndex) error { return wantErr }
 
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -1741,11 +1761,12 @@ func TestRegisterAllowsExistingUsernameForSameAccountID(t *testing.T) {
 
 	material := testBootstrapMaterial(t)
 	createAccount = func(string) (accounts.Material, error) { return material, nil }
-	loadUsernameIndex = func() (map[string]string, error) {
-		return map[string]string{"alice": material.AccountID}, nil
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {material.AccountID}}, nil
 	}
 	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
-	saveUsernameIndex = func(map[string]string) error { return nil }
+	saveUsernameIndex = func(usernameIndex) error { return nil }
+	saveLocalProfile = func(string, string) (string, error) { return "", nil }
 
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -1783,7 +1804,7 @@ func TestLoginReturnsUsernameIndexLoadError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 	wantErr := errors.New("load index failed")
-	loadUsernameIndex = func() (map[string]string, error) { return nil, wantErr }
+	loadUsernameIndex = func() (usernameIndex, error) { return nil, wantErr }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
 		t.Fatalf("Login() error = %v, want %v", err, wantErr)
@@ -1798,14 +1819,14 @@ func TestLoginReturnsMissingUsernameError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
 		t.Fatal("Login() error = nil, want username missing failure")
 	}
 }
 
-func TestLoginReturnsBlankAccountMappingError(t *testing.T) {
+func TestLoginReturnsAmbiguousUsernameError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
@@ -1813,10 +1834,12 @@ func TestLoginReturnsBlankAccountMappingError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": " "}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {"account-1", "account-2"}}, nil
+	}
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
-		t.Fatal("Login() error = nil, want blank account id failure")
+		t.Fatal("Login() error = nil, want ambiguous username failure")
 	}
 }
 
@@ -1828,7 +1851,9 @@ func TestLoginReturnsBlobMissingError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
+	}
 	readManagedFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
@@ -1844,7 +1869,9 @@ func TestLoginReturnsBlobReadError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
+	}
 	wantErr := errors.New("read failed")
 	readManagedFile = func(string) ([]byte, error) { return nil, wantErr }
 
@@ -1861,7 +1888,9 @@ func TestLoginReturnsRecoverError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
+	}
 	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
 	wantErr := errors.New("recover failed")
 	recoverAccount = func([]byte, string) (accounts.Material, error) { return accounts.Material{}, wantErr }
@@ -1879,7 +1908,9 @@ func TestLoginReturnsRecoveredAccountMismatchError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (map[string]string, error) { return map[string]string{"alice": testAccountID}, nil }
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
+	}
 	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
 	recoverAccount = func([]byte, string) (accounts.Material, error) {
 		return accounts.Material{AccountID: "other-account"}, nil
@@ -1890,83 +1921,83 @@ func TestLoginReturnsRecoveredAccountMismatchError(t *testing.T) {
 	}
 }
 
-func TestLoadUsernameRegistryHandlesReadPaths(t *testing.T) {
+func TestLoadUsernameIndexCacheHandlesReadPaths(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
 	readManagedFile = func(path string) ([]byte, error) {
-		if path != usernameRegistryPath {
-			t.Fatalf("readManagedFile() path = %q, want %q", path, usernameRegistryPath)
+		if path != usernameIndexPath {
+			t.Fatalf("readManagedFile() path = %q, want %q", path, usernameIndexPath)
 		}
 		return nil, os.ErrNotExist
 	}
-	registry, err := loadUsernameRegistry()
+	index, err := loadUsernameIndexCache()
 	if err != nil {
-		t.Fatalf("loadUsernameRegistry() error = %v", err)
+		t.Fatalf("loadUsernameIndexCache() error = %v", err)
 	}
-	if len(registry) != 0 {
-		t.Fatalf("loadUsernameRegistry() len = %d, want 0", len(registry))
+	if len(index) != 0 {
+		t.Fatalf("loadUsernameIndexCache() len = %d, want 0", len(index))
 	}
 
-	readManagedFile = func(string) ([]byte, error) { return []byte(`{"alice":"account-1"}`), nil }
-	registry, err = loadUsernameRegistry()
+	readManagedFile = func(string) ([]byte, error) { return []byte(`{"hash-alice":["account-1"]}`), nil }
+	index, err = loadUsernameIndexCache()
 	if err != nil {
-		t.Fatalf("loadUsernameRegistry() success-path error = %v", err)
+		t.Fatalf("loadUsernameIndexCache() success-path error = %v", err)
 	}
-	if got := registry["alice"]; got != "account-1" {
-		t.Fatalf("loadUsernameRegistry() registry[alice] = %q, want %q", got, "account-1")
+	if got := index.accountIDsForHash("hash-alice"); len(got) != 1 || got[0] != "account-1" {
+		t.Fatalf("loadUsernameIndexCache() index[hash-alice] = %#v, want [account-1]", got)
 	}
 
 	readManagedFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
-	if _, err := loadUsernameRegistry(); err == nil {
-		t.Fatal("loadUsernameRegistry() error = nil, want read failure")
+	if _, err := loadUsernameIndexCache(); err == nil {
+		t.Fatal("loadUsernameIndexCache() error = nil, want read failure")
 	}
 
 	readManagedFile = func(string) ([]byte, error) { return []byte("{bad"), nil }
-	if _, err := loadUsernameRegistry(); err == nil {
-		t.Fatal("loadUsernameRegistry() error = nil, want unmarshal failure")
+	if _, err := loadUsernameIndexCache(); err == nil {
+		t.Fatal("loadUsernameIndexCache() error = nil, want unmarshal failure")
 	}
 }
 
-func TestSaveUsernameRegistryPersistsJSON(t *testing.T) {
+func TestSaveUsernameIndexCachePersistsJSON(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
 	calls := 0
 	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
 		calls++
-		if path != usernameRegistryPath {
-			t.Fatalf("writeManagedFile() path = %q, want %q", path, usernameRegistryPath)
+		if path != usernameIndexPath {
+			t.Fatalf("writeManagedFile() path = %q, want %q", path, usernameIndexPath)
 		}
 		if perm != 0o644 {
 			t.Fatalf("writeManagedFile() perm = %#o, want %#o", perm, 0o644)
 		}
-		if calls == 1 && !strings.Contains(string(data), "\"alice\"") {
-			t.Fatalf("writeManagedFile() data = %s, want username json", string(data))
+		if calls == 1 && !strings.Contains(string(data), `"hash-alice"`) {
+			t.Fatalf("writeManagedFile() data = %s, want username index json", string(data))
 		}
 		return nil
 	}
 
-	if err := saveUsernameRegistry(map[string]string{"alice": testAccountID}); err != nil {
-		t.Fatalf("saveUsernameRegistry() error = %v", err)
+	if err := saveUsernameIndexCache(usernameIndex{"hash-alice": {testAccountID}}); err != nil {
+		t.Fatalf("saveUsernameIndexCache() error = %v", err)
 	}
-	if err := saveUsernameRegistry(nil); err != nil {
-		t.Fatalf("saveUsernameRegistry(nil) error = %v", err)
+	if err := saveUsernameIndexCache(nil); err != nil {
+		t.Fatalf("saveUsernameIndexCache(nil) error = %v", err)
 	}
 	if calls != 2 {
 		t.Fatalf("writeManagedFile() calls = %d, want 2", calls)
 	}
 }
 
-func TestSaveUsernameRegistryReturnsWriteError(t *testing.T) {
+func TestSaveUsernameIndexCacheReturnsWriteError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
 	wantErr := errors.New("write failed")
 	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
 
-	if err := saveUsernameRegistry(map[string]string{"alice": testAccountID}); !errors.Is(err, wantErr) {
-		t.Fatalf("saveUsernameRegistry() error = %v, want %v", err, wantErr)
+	if err := saveUsernameIndexCache(usernameIndex{"hash-alice": {testAccountID}}); !errors.Is(err, wantErr) {
+		t.Fatalf("saveUsernameIndexCache() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -3192,7 +3223,7 @@ func TestBuildCompletionArtifactsReturnsPeerSignError(t *testing.T) {
 			ObservedIPv4: testBootstrapHost,
 			Port:         58103,
 		},
-	}, material)
+	}, material, "")
 	if err == nil || err.Error() != testSignFailedText {
 		t.Fatalf("buildCompletionArtifacts() error = %v, want %s", err, testSignFailedText)
 	}
@@ -3218,7 +3249,7 @@ func TestBuildCompletionArtifactsReturnsMetaSignError(t *testing.T) {
 			ObservedIPv4: testBootstrapHost,
 			Port:         58103,
 		},
-	}, material)
+	}, material, "")
 	if err == nil || err.Error() != testSignFailedText {
 		t.Fatalf("buildCompletionArtifacts() error = %v, want %s", err, testSignFailedText)
 	}
@@ -3240,7 +3271,7 @@ func TestBuildCompletionArtifactsReturnsAccountMetaError(t *testing.T) {
 		AccountID:  "",
 		PublicKey:  publicKey,
 		PrivateKey: privateKey,
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("buildCompletionArtifacts() error = nil, want account meta failure")
 	}
@@ -3532,6 +3563,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalResolveNodeID := resolveNodeID
 	originalCreateAccount := createAccount
 	originalRecoverAccount := recoverAccount
+	originalSaveLocalProfile := saveLocalProfile
 	originalHTTPClient := httpClient
 	originalFetchRemoteList := fetchRemoteList
 	originalProbeEndpoint := probeEndpoint
@@ -3555,6 +3587,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	resolveNodeID = nodeid.GetNodeID
 	createAccount = accounts.Generate
 	recoverAccount = accounts.Recover
+	saveLocalProfile = func(string, string) (string, error) { return "", nil }
 	httpClient = &http.Client{Timeout: 5 * time.Second}
 	fetchRemoteList = fetchRemoteBootstrapList
 	probeEndpoint = measureEndpointLatency
@@ -3562,8 +3595,8 @@ func stubBootstrapHooks(t *testing.T) func() {
 	listenBootstrap = listenBootstrapEndpoint
 	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords = loadExistingNodeRecords
-	loadUsernameIndex = loadUsernameRegistry
-	saveUsernameIndex = saveUsernameRegistry
+	loadUsernameIndex = loadUsernameIndexCache
+	saveUsernameIndex = saveUsernameIndexCache
 	currentTime = time.Now
 	scheduleAfter = time.AfterFunc
 	signPeerOrMeta = signPayload
@@ -3580,6 +3613,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 		resolveNodeID = originalResolveNodeID
 		createAccount = originalCreateAccount
 		recoverAccount = originalRecoverAccount
+		saveLocalProfile = originalSaveLocalProfile
 		httpClient = originalHTTPClient
 		fetchRemoteList = originalFetchRemoteList
 		probeEndpoint = originalProbeEndpoint

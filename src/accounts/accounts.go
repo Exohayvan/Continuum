@@ -24,7 +24,9 @@ import (
 const (
 	localAccountDir = "local/account"
 	keyFileSuffix   = ".key"
+	profileSuffix   = ".profile"
 	privateKeyPerm  = 0o600
+	profileFilePerm = 0o600
 	blobKeyLength   = 32
 	blobSaltLength  = 16
 	blobNonceLength = 12
@@ -35,16 +37,18 @@ const (
 	pubkeyFilePerm  = 0o644
 	errAccountID    = "account id is required"
 	errAccountPass  = "account password is required"
+	errUsername     = "username is required"
 )
 
 var (
-	resolveNodeID   = nodeid.GetNodeID
-	readKeyFile     = datamanager.ReadFile
-	writeKeyFile    = datamanager.WriteFile
-	generateKeyPair = ed25519.GenerateKey
-	randomReader    = rand.Reader
-	currentTime     = time.Now
-	deriveBlobKey   = func(password string, salt []byte) ([]byte, error) {
+	resolveNodeID    = nodeid.GetNodeID
+	readKeyFile      = datamanager.ReadFile
+	writeKeyFile     = datamanager.WriteFile
+	writeProfileFile = datamanager.WriteFile
+	generateKeyPair  = ed25519.GenerateKey
+	randomReader     = rand.Reader
+	currentTime      = time.Now
+	deriveBlobKey    = func(password string, salt []byte) ([]byte, error) {
 		return scrypt.Key([]byte(password), salt, blobN, blobR, blobP, blobKeyLength)
 	}
 	newAESCipher       = aes.NewCipher
@@ -74,20 +78,29 @@ type unsignedBlob struct {
 }
 
 type Meta struct {
-	AccountID string `json:"AccountID"`
-	PublicKey string `json:"PublicKey"`
-	CreatedAt string `json:"Created At"`
-	Revision  int    `json:"Revision"`
-	UpdatedAt string `json:"Updated At"`
-	Signature string `json:"Signature"`
+	AccountID    string `json:"AccountID"`
+	PublicKey    string `json:"PublicKey"`
+	CreatedAt    string `json:"Created At"`
+	Revision     int    `json:"Revision"`
+	UpdatedAt    string `json:"Updated At"`
+	UsernameHash string `json:"username_hash,omitempty"`
+	Signature    string `json:"Signature"`
 }
 
 type unsignedMeta struct {
-	AccountID string `json:"AccountID"`
-	PublicKey string `json:"PublicKey"`
-	CreatedAt string `json:"Created At"`
-	Revision  int    `json:"Revision"`
-	UpdatedAt string `json:"Updated At"`
+	AccountID    string `json:"AccountID"`
+	PublicKey    string `json:"PublicKey"`
+	CreatedAt    string `json:"Created At"`
+	Revision     int    `json:"Revision"`
+	UpdatedAt    string `json:"Updated At"`
+	UsernameHash string `json:"username_hash,omitempty"`
+}
+
+type LocalProfile struct {
+	AccountID    string `json:"account_id"`
+	Username     string `json:"username"`
+	UsernameHash string `json:"username_hash"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 // Keys captures the persisted account signing keypair for the current node.
@@ -182,6 +195,19 @@ func LocalKeyPath(accountID string) string {
 	return filepath.Join(localAccountDir, strings.TrimSpace(accountID)+keyFileSuffix)
 }
 
+// LocalProfilePath returns the managed-data relative path for the account's local
+// plaintext profile copy.
+func LocalProfilePath(accountID string) string {
+	return filepath.Join(localAccountDir, strings.TrimSpace(accountID)+profileSuffix)
+}
+
+// UsernameHash deterministically derives a lookup hash from the normalized username.
+func UsernameHash(username string) string {
+	normalized := strings.ToLower(strings.TrimSpace(username))
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:])
+}
+
 func requiredAccountID(accountID string) (string, error) {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
@@ -199,6 +225,15 @@ func validateAccountPassword(password string) error {
 	return nil
 }
 
+func requiredUsername(username string) (string, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", errors.New(errUsername)
+	}
+
+	return username, nil
+}
+
 // SaveLocalKey persists the account private key in the managed local account
 // directory using the account id as the filename.
 func SaveLocalKey(accountID string, privateKey ed25519.PrivateKey) (string, error) {
@@ -209,6 +244,45 @@ func SaveLocalKey(accountID string, privateKey ed25519.PrivateKey) (string, erro
 
 	path := LocalKeyPath(accountID)
 	if err := writeKeyFile(path, encodePrivateKey(privateKey), privateKeyPerm); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+// BuildLocalProfile serializes the local plaintext account profile.
+func BuildLocalProfile(accountID, username string) ([]byte, error) {
+	accountID, err := requiredAccountID(accountID)
+	if err != nil {
+		return nil, err
+	}
+	username, err = requiredUsername(username)
+	if err != nil {
+		return nil, err
+	}
+
+	return json.MarshalIndent(LocalProfile{
+		AccountID:    accountID,
+		Username:     username,
+		UsernameHash: UsernameHash(username),
+		UpdatedAt:    currentTime().UTC().Format(time.RFC3339),
+	}, "", "  ")
+}
+
+// SaveLocalProfile persists a local plaintext profile for display and convenience use.
+func SaveLocalProfile(accountID, username string) (string, error) {
+	accountID, err := requiredAccountID(accountID)
+	if err != nil {
+		return "", err
+	}
+
+	data, err := BuildLocalProfile(accountID, username)
+	if err != nil {
+		return "", err
+	}
+
+	path := LocalProfilePath(accountID)
+	if err := writeProfileFile(path, data, profileFilePerm); err != nil {
 		return "", err
 	}
 
@@ -358,6 +432,11 @@ func DecodePublicKeyFile(data []byte) (ed25519.PublicKey, error) {
 
 // BuildMeta constructs the signed accountID.meta payload.
 func BuildMeta(accountID string, publicKey ed25519.PublicKey, createdAt string, revision int, privateKey ed25519.PrivateKey) ([]byte, error) {
+	return BuildMetaWithUsernameHash(accountID, publicKey, createdAt, revision, "", privateKey)
+}
+
+// BuildMetaWithUsernameHash constructs the signed accountID.meta payload with an optional username hash.
+func BuildMetaWithUsernameHash(accountID string, publicKey ed25519.PublicKey, createdAt string, revision int, usernameHash string, privateKey ed25519.PrivateKey) ([]byte, error) {
 	accountID, err := requiredAccountID(accountID)
 	if err != nil {
 		return nil, err
@@ -370,11 +449,12 @@ func BuildMeta(accountID string, publicKey ed25519.PublicKey, createdAt string, 
 	}
 
 	unsigned := unsignedMeta{
-		AccountID: accountID,
-		PublicKey: base64.StdEncoding.EncodeToString(publicKey),
-		CreatedAt: createdAt,
-		Revision:  revision,
-		UpdatedAt: currentTime().UTC().Format(time.RFC3339),
+		AccountID:    accountID,
+		PublicKey:    base64.StdEncoding.EncodeToString(publicKey),
+		CreatedAt:    createdAt,
+		Revision:     revision,
+		UpdatedAt:    currentTime().UTC().Format(time.RFC3339),
+		UsernameHash: strings.TrimSpace(usernameHash),
 	}
 	signature, err := signAccountPayload(privateKey, unsigned)
 	if err != nil {
@@ -382,12 +462,13 @@ func BuildMeta(accountID string, publicKey ed25519.PublicKey, createdAt string, 
 	}
 
 	return json.MarshalIndent(Meta{
-		AccountID: unsigned.AccountID,
-		PublicKey: unsigned.PublicKey,
-		CreatedAt: unsigned.CreatedAt,
-		Revision:  unsigned.Revision,
-		UpdatedAt: unsigned.UpdatedAt,
-		Signature: signature,
+		AccountID:    unsigned.AccountID,
+		PublicKey:    unsigned.PublicKey,
+		CreatedAt:    unsigned.CreatedAt,
+		Revision:     unsigned.Revision,
+		UpdatedAt:    unsigned.UpdatedAt,
+		UsernameHash: unsigned.UsernameHash,
+		Signature:    signature,
 	}, "", "  ")
 }
 
@@ -412,11 +493,12 @@ func VerifyMeta(accountID string, publicKey ed25519.PublicKey, data []byte) (Met
 	}
 
 	unsigned := unsignedMeta{
-		AccountID: meta.AccountID,
-		PublicKey: meta.PublicKey,
-		CreatedAt: meta.CreatedAt,
-		Revision:  meta.Revision,
-		UpdatedAt: meta.UpdatedAt,
+		AccountID:    meta.AccountID,
+		PublicKey:    meta.PublicKey,
+		CreatedAt:    meta.CreatedAt,
+		Revision:     meta.Revision,
+		UpdatedAt:    meta.UpdatedAt,
+		UsernameHash: strings.TrimSpace(meta.UsernameHash),
 	}
 	if err := verifySignature(publicKey, unsigned, meta.Signature); err != nil {
 		return Meta{}, err
