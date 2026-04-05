@@ -84,6 +84,8 @@ var (
 		"adjust",
 		"adjusts",
 		"adjusted",
+		"reworked",
+		"rework",
 		"ci",
 	}
 )
