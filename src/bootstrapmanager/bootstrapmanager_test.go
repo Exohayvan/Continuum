@@ -42,6 +42,9 @@ const (
 	testEmptyStartResponseErrorFormat        = "startResponse.Error = %q, want empty"
 	testEncodeFinalizeRequestErrorFormat     = "Encode(finalize request) error = %v"
 	testDecodeFinalizeResponseErrorFormat    = "Decode(finalize response) error = %v"
+	testEncodeLookupRequestErrorFormat       = "Encode(lookup request) error = %v"
+	testDecodeLookupResponseErrorFormat      = "Decode(lookup response) error = %v"
+	testEmptyLookupResponseErrorFormat       = "lookupResponse.Error = %q, want empty"
 	testMarshalErrorFormat                   = "Marshal() error = %v"
 	testWriteErrorFormat                     = "Write() error = %v"
 	testMkdirAllErrorFormat                  = "MkdirAll() error = %v"
@@ -49,17 +52,21 @@ const (
 	testLoadStateNeedsBootstrapText          = "LoadState() NeedsBootstrap = false, want true"
 	testBuildAccountFixturesErrorFormat      = "buildAccountFixtures() error = %v"
 	testBuildAccountFixturesOtherErrorFormat = "buildAccountFixtures() other error = %v"
+	testBuildMetaWithUsernameHashErrFmt      = "BuildMetaWithUsernameHash() error = %v"
 	testConnectErrorFormat                   = "Connect() error = %v"
 	testConnectWantErrorFormat               = "Connect() error = %v, want %v"
 	testCompleteWantErrorFormat              = "Complete() error = %v, want %s"
 	testRegisterWantErrorFormat              = "Register() error = %v, want %v"
 	testLoginWantErrorFormat                 = "Login() error = %v, want %v"
+	testRestoreRecoveryWantErrorFormat       = "restoreRecoveryCompletion() error = %v, want %v"
 	testSaveLocalProfileArgsFormat           = "saveLocalProfile() args = (%q, %q), want (%q, %q)"
 	testGenerateKeyErrorFormat               = "GenerateKey() error = %v"
 	testDefaultListenPortFormat              = "defaultListenPort() = %d, want %d"
 	testLoadExistingNodeRecordsErrorFormat   = "loadExistingNodeRecords() error = %v"
 	testLoadExistingAccountRecordsWantErrFmt = "loadExistingAccountRecords() error = %v, want %v"
 	testVerifyPublicKeyFileErrorFormat       = "VerifyPublicKeyFile() error = %v"
+	testLoadLookupBundleWantErrFmt           = "loadBootstrapLookupBundle() error = %v, want %v"
+	testBuildAccountBundleNilFormat          = "buildAccountBundle(%s) = %#v, want nil"
 	testAccountID                            = "account-123"
 	testAccountPassword                      = "secret-pass"
 	testAccountKeyFile                       = "account-123.key"
@@ -78,11 +85,19 @@ const (
 	testWriteFailedText                      = "write failed"
 	testSignFailedText                       = "sign failed"
 	testFinalizeFailedText                   = "finalize failed"
+	testLoadFailedText                       = "load failed"
 	testPeerReadFailedText                   = "peer read failed"
 	testLayoutErrorText                      = "layout failed"
 	testReadDirErrorText                     = "readdir failed"
 	testLoadNodesErrorText                   = "bootstrap load failed"
 	testSessionMissingText                   = "bootstrap session expired or was not found"
+	testUsernameDoesNotExistText             = "username does not exist"
+	testMissingPubkeyText                    = "missing pubkey"
+	testMissingMetaText                      = "missing meta"
+	testMissingBlobText                      = "missing blob"
+	testRecoveryBundleMissingText            = "recovery bundle is missing"
+	testRecoveryAccountIDMissingText         = "recovery bundle did not include an account id"
+	testRecoveryBlobDataMissingText          = "recovery bundle is missing account blob data"
 )
 
 func TestLoadStateReturnsExistingPeerCount(t *testing.T) {
@@ -269,6 +284,9 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 	if !response.RecoveryAvailable {
 		t.Fatal("buildBootstrapStartResponse().RecoveryAvailable = false, want true")
 	}
+	if len(response.RecoveryBundle) != 5 {
+		t.Fatalf("len(buildBootstrapStartResponse().RecoveryBundle) = %d, want %d", len(response.RecoveryBundle), 5)
+	}
 	if response.AccountID != accountID {
 		t.Fatalf("buildBootstrapStartResponse().AccountID = %q, want %q", response.AccountID, accountID)
 	}
@@ -297,7 +315,7 @@ func TestBuildBootstrapStartResponsePropagatesUsernameHash(t *testing.T) {
 	accountPubKey := privateKey.Public().(ed25519.PublicKey)
 	accountMetaData, err := accounts.BuildMetaWithUsernameHash(accountID, accountPubKey, testBootstrapTimestamp, 1, testAliceHashKey, privateKey)
 	if err != nil {
-		t.Fatalf("BuildMetaWithUsernameHash() error = %v", err)
+		t.Fatalf(testBuildMetaWithUsernameHashErrFmt, err)
 	}
 
 	probeEndpoint = func(string, int) (time.Duration, error) {
@@ -327,6 +345,33 @@ func TestBuildBootstrapStartResponsePropagatesUsernameHash(t *testing.T) {
 	})
 	if response.UsernameHash != testAliceHashKey {
 		t.Fatalf("buildBootstrapStartResponse().UsernameHash = %q, want %q", response.UsernameHash, testAliceHashKey)
+	}
+}
+
+func TestCompletionMaterialUsesRecoveryBlob(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	wantMaterial := accounts.Material{AccountID: testAccountID}
+	recoverAccount = func(blobData []byte, password string) (accounts.Material, error) {
+		if string(blobData) != testAccountBlobJSON {
+			t.Fatalf("recoverAccount() blobData = %s, want %s", string(blobData), testAccountBlobJSON)
+		}
+		if password != testRecoveryPassword {
+			t.Fatalf("recoverAccount() password = %q, want %q", password, testRecoveryPassword)
+		}
+		return wantMaterial, nil
+	}
+
+	got, err := completionMaterial(bootstrapSessionStartResponse{
+		RecoveryAvailable: true,
+		AccountBlob:       []byte(testAccountBlobJSON),
+	}, testRecoveryPassword)
+	if err != nil {
+		t.Fatalf("completionMaterial() error = %v", err)
+	}
+	if got.AccountID != wantMaterial.AccountID {
+		t.Fatalf("completionMaterial().AccountID = %q, want %q", got.AccountID, wantMaterial.AccountID)
 	}
 }
 
@@ -1085,6 +1130,9 @@ func TestHandleBootstrapConnectionAcceptsValidFinalizeRequest(t *testing.T) {
 
 	writtenFiles := map[string][]byte{}
 	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
+		if _, ok := getPendingSession(testSessionID); ok {
+			t.Fatal("writeManagedFile() called before finalizeBootstrapSession() completed")
+		}
 		writtenFiles[path] = append([]byte(nil), data...)
 		return nil
 	}
@@ -1313,6 +1361,455 @@ func TestHandleBootstrapConnectionReturnsWriteNetworkFilesError(t *testing.T) {
 	<-done
 }
 
+func TestHandleBootstrapConnectionSupportsLookupBeforeFinalize(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{aliceHash: []string{fixture.accountID}}, nil
+	}
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			return fixture.accountMetaData, nil
+		case accountBlobRelativePath(fixture.accountID):
+			return fixture.blobData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	writtenFiles := map[string][]byte{}
+	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
+		writtenFiles[path] = append([]byte(nil), data...)
+		return nil
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	go handleBootstrapConnection(connWithRemoteAddr{
+		Conn:       serverConn,
+		remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
+	})
+
+	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionStartRequest{
+		Type:       "start",
+		NodeID:     testJoiningNodeID,
+		ListenPort: 58103,
+	}); err != nil {
+		t.Fatalf(testEncodeStartRequestErrorFormat, err)
+	}
+
+	startResponse := decodeBootstrapStartResponse(t, clientConn)
+	if startResponse.Error != "" {
+		t.Fatalf(testEmptyStartResponseErrorFormat, startResponse.Error)
+	}
+	if startResponse.RecoveryAvailable {
+		t.Fatal("startResponse.RecoveryAvailable = true, want false for unknown node")
+	}
+
+	lookupResponse := lookupBootstrapSessionResponse(t, clientConn, aliceHash)
+	if lookupResponse.Error != "" {
+		t.Fatalf(testEmptyLookupResponseErrorFormat, lookupResponse.Error)
+	}
+	if lookupResponse.AccountID != fixture.accountID {
+		t.Fatalf("lookupResponse.AccountID = %q, want %q", lookupResponse.AccountID, fixture.accountID)
+	}
+	if len(lookupResponse.AccountBundle) != 3 {
+		t.Fatalf("len(lookupResponse.AccountBundle) = %d, want %d", len(lookupResponse.AccountBundle), 3)
+	}
+
+	finalizeResponse := finalizeBootstrapSessionResponse(t, clientConn, fixture, startResponse)
+	if finalizeResponse.Error != "" {
+		t.Fatalf("finalizeResponse.Error = %q, want empty", finalizeResponse.Error)
+	}
+
+	assertBootstrapLookupFilesWritten(t, writtenFiles, fixture.accountID)
+}
+
+func decodeBootstrapStartResponse(t *testing.T, clientConn net.Conn) bootstrapSessionStartResponse {
+	t.Helper()
+
+	var startResponse bootstrapSessionStartResponse
+	if err := json.NewDecoder(clientConn).Decode(&startResponse); err != nil {
+		t.Fatalf(testDecodeStartResponseErrorFormat, err)
+	}
+
+	return startResponse
+}
+
+func lookupBootstrapSessionResponse(t *testing.T, clientConn net.Conn, usernameHash string) bootstrapSessionLookupResponse {
+	t.Helper()
+
+	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionLookupRequest{
+		Type:         "lookup",
+		UsernameHash: usernameHash,
+	}); err != nil {
+		t.Fatalf(testEncodeLookupRequestErrorFormat, err)
+	}
+
+	var lookupResponse bootstrapSessionLookupResponse
+	if err := json.NewDecoder(clientConn).Decode(&lookupResponse); err != nil {
+		t.Fatalf(testDecodeLookupResponseErrorFormat, err)
+	}
+
+	return lookupResponse
+}
+
+func finalizeBootstrapSessionResponse(t *testing.T, clientConn net.Conn, fixture recoveryFixtureData, startResponse bootstrapSessionStartResponse) bootstrapSessionFinalizeResponse {
+	t.Helper()
+
+	peerData := buildSignedPeerFixture(t, fixture.privateKey, testBootstrapHost, 58103, fixture.accountID)
+	metaData := buildSignedMetaFixture(t, fixture.privateKey, testJoiningNodeID, fixture.accountID, startResponse.FirstSeen, startResponse.Revision)
+	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionFinalizeRequest{
+		Type:          "finalize",
+		NodeID:        testJoiningNodeID,
+		AccountID:     fixture.accountID,
+		PeerData:      peerData,
+		MetaData:      metaData,
+		AccountBlob:   fixture.blobData,
+		AccountPubKey: fixture.accountPubKeyData,
+		AccountMeta:   fixture.accountMetaData,
+	}); err != nil {
+		t.Fatalf(testEncodeFinalizeRequestErrorFormat, err)
+	}
+
+	var finalizeResponse bootstrapSessionFinalizeResponse
+	if err := json.NewDecoder(clientConn).Decode(&finalizeResponse); err != nil {
+		t.Fatalf(testDecodeFinalizeResponseErrorFormat, err)
+	}
+
+	return finalizeResponse
+}
+
+func assertBootstrapLookupFilesWritten(t *testing.T, writtenFiles map[string][]byte, accountID string) {
+	t.Helper()
+
+	requiredPaths := []string{
+		peerRelativePath(testJoiningNodeID),
+		metaRelativePath(testJoiningNodeID),
+		accountBlobRelativePath(accountID),
+		accountPubKeyRelativePath(accountID),
+		accountMetaRelativePath(accountID),
+	}
+	for _, path := range requiredPaths {
+		if _, ok := writtenFiles[path]; !ok {
+			t.Fatalf("missing written bootstrap file: %s", path)
+		}
+	}
+}
+
+func TestHandleBootstrapConnectionReturnsOnUnknownRequestType(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		handleBootstrapConnection(connWithRemoteAddr{
+			Conn:       serverConn,
+			remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
+		})
+		close(done)
+	}()
+
+	if err := json.NewEncoder(clientConn).Encode(bootstrapSessionStartRequest{
+		Type:       "start",
+		NodeID:     testJoiningNodeID,
+		ListenPort: 58103,
+	}); err != nil {
+		t.Fatalf(testEncodeStartRequestErrorFormat, err)
+	}
+
+	var startResponse bootstrapSessionStartResponse
+	if err := json.NewDecoder(clientConn).Decode(&startResponse); err != nil {
+		t.Fatalf(testDecodeStartResponseErrorFormat, err)
+	}
+	if startResponse.Error != "" {
+		t.Fatalf(testEmptyStartResponseErrorFormat, startResponse.Error)
+	}
+
+	if err := json.NewEncoder(clientConn).Encode(struct {
+		Type string `json:"type"`
+	}{Type: "other"}); err != nil {
+		t.Fatalf(testEncodeErrorFormat, err)
+	}
+
+	_ = clientConn.Close()
+	<-done
+}
+
+func TestDecodeBootstrapSessionRequestReturnsFalseOnInvalidTypeJSON(t *testing.T) {
+	rawRequest, requestType, ok := decodeBootstrapSessionRequest(json.NewDecoder(bytes.NewBufferString("1")))
+	if ok {
+		t.Fatal("decodeBootstrapSessionRequest() ok = true, want false")
+	}
+	if rawRequest != nil || requestType != "" {
+		t.Fatalf("decodeBootstrapSessionRequest() = (%v, %q, %t), want zero values", rawRequest, requestType, ok)
+	}
+}
+
+func TestHandleBootstrapLookupRequestReturnsFalseOnInvalidJSON(t *testing.T) {
+	if handleBootstrapLookupRequest([]byte("1"), json.NewEncoder(&bytes.Buffer{})) {
+		t.Fatal("handleBootstrapLookupRequest() = true, want false")
+	}
+}
+
+func TestHandleBootstrapFinalizeRequestReturnsFalseOnInvalidJSON(t *testing.T) {
+	if handleBootstrapFinalizeRequest([]byte("1"), json.NewEncoder(&bytes.Buffer{})) {
+		t.Fatal("handleBootstrapFinalizeRequest() = true, want false")
+	}
+}
+
+func TestBuildBootstrapLookupResponseReturnsBlankHashError(t *testing.T) {
+	response := buildBootstrapLookupResponse(bootstrapSessionLookupRequest{})
+	if response.Error != "username hash is required" {
+		t.Fatalf("buildBootstrapLookupResponse(blank) error = %q, want username hash failure", response.Error)
+	}
+}
+
+func TestBuildBootstrapLookupResponseReturnsIndexLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return nil, errors.New(testLoadFailedText) }
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), testLoadFailedText)
+}
+
+func TestBuildBootstrapLookupResponseReturnsMissingUsernameError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), testUsernameDoesNotExistText)
+}
+
+func TestBuildBootstrapLookupResponseReturnsAmbiguousUsernameError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) {
+		return usernameIndex{aliceHash: []string{testFirstIndexedAccountID, testSecondIndexedAccountID}}, nil
+	}
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), "username matches multiple accounts")
+}
+
+func TestBuildBootstrapLookupResponseReturnsMissingPubkeyError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{aliceHash: []string{fixture.accountID}}, nil }
+	readManagedFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), "account public key for username was not found on bootstrap")
+}
+
+func TestBuildBootstrapLookupResponseReturnsMissingMetaError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{aliceHash: []string{fixture.accountID}}, nil }
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), "account metadata for username was not found on bootstrap")
+}
+
+func TestBuildBootstrapLookupResponseReturnsMissingBlobError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{aliceHash: []string{fixture.accountID}}, nil }
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			return fixture.accountMetaData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), "account blob for username was not found on bootstrap")
+}
+
+func TestBuildBootstrapLookupResponseReturnsRereadPubkeyError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{aliceHash: []string{fixture.accountID}}, nil }
+	pubkeyReads := 0
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			pubkeyReads++
+			if pubkeyReads == 2 {
+				return nil, errors.New("reread pubkey failed")
+			}
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			return fixture.accountMetaData, nil
+		case accountBlobRelativePath(fixture.accountID):
+			return fixture.blobData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), "reread pubkey failed")
+}
+
+func TestBuildBootstrapLookupResponseReturnsRereadMetaError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{aliceHash: []string{fixture.accountID}}, nil }
+	metaReads := 0
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			metaReads++
+			if metaReads == 2 {
+				return nil, errors.New("reread meta failed")
+			}
+			return fixture.accountMetaData, nil
+		case accountBlobRelativePath(fixture.accountID):
+			return fixture.blobData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	assertBootstrapLookupResponseError(t, buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash}), "reread meta failed")
+}
+
+func TestBuildBootstrapLookupResponseReturnsAccountBundle(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	aliceHash := accounts.UsernameHash("alice")
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{aliceHash: []string{fixture.accountID}}, nil }
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			return fixture.accountMetaData, nil
+		case accountBlobRelativePath(fixture.accountID):
+			return fixture.blobData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	response := buildBootstrapLookupResponse(bootstrapSessionLookupRequest{UsernameHash: aliceHash})
+	if response.Error != "" {
+		t.Fatalf("buildBootstrapLookupResponse(success) error = %q, want empty", response.Error)
+	}
+	if response.AccountID != fixture.accountID || len(response.AccountBundle) != 3 {
+		t.Fatalf("buildBootstrapLookupResponse(success) = %#v, want account bundle", response)
+	}
+}
+
+func TestLoadBootstrapLookupBundleReturnsPubkeyLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	wantErr := errors.New("pubkey load failed")
+	readManagedFile = func(string) ([]byte, error) { return nil, wantErr }
+
+	if _, _, err := loadBootstrapLookupBundle(fixture.accountID); !errors.Is(err, wantErr) {
+		t.Fatalf(testLoadLookupBundleWantErrFmt, err, wantErr)
+	}
+}
+
+func TestLoadBootstrapLookupBundleReturnsMetaLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	wantErr := errors.New("meta load failed")
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			return nil, wantErr
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	if _, _, err := loadBootstrapLookupBundle(fixture.accountID); !errors.Is(err, wantErr) {
+		t.Fatalf(testLoadLookupBundleWantErrFmt, err, wantErr)
+	}
+}
+
+func TestLoadBootstrapLookupBundleReturnsBlobLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	wantErr := errors.New("blob load failed")
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case accountPubKeyRelativePath(fixture.accountID):
+			return fixture.accountPubKeyData, nil
+		case accountMetaRelativePath(fixture.accountID):
+			return fixture.accountMetaData, nil
+		case accountBlobRelativePath(fixture.accountID):
+			return nil, wantErr
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	if _, _, err := loadBootstrapLookupBundle(fixture.accountID); !errors.Is(err, wantErr) {
+		t.Fatalf(testLoadLookupBundleWantErrFmt, err, wantErr)
+	}
+}
+
+func assertBootstrapLookupResponseError(t *testing.T, response bootstrapSessionLookupResponse, want string) {
+	t.Helper()
+
+	if response.Error != want {
+		t.Fatalf("buildBootstrapLookupResponse() error = %q, want %q", response.Error, want)
+	}
+}
+
 func TestCompleteCreatesFilesAndFinalizesSession(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -1368,21 +1865,31 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testGenerateKeyErrorFormat, err)
 	}
+	accountID := accounts.AccountIDFromPublicKey(publicKey)
+	recoveryBlobData, err := accounts.BuildBlob(accountID, publicKey, privateKey, testRecoveryPassword)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	accountMetaData, err := accounts.BuildMeta(accountID, publicKey, testBootstrapTimestamp, 1, privateKey)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+
 	recoverCalled := false
 	recoverAccount = func(blobData []byte, password string) (accounts.Material, error) {
 		recoverCalled = true
-		if string(blobData) != `{"blob":"data"}` {
-			t.Fatalf("recoverAccount() blobData = %s, want %s", string(blobData), `{"blob":"data"}`)
+		if string(blobData) != string(recoveryBlobData) {
+			t.Fatalf("recoverAccount() blobData = %s, want recovery bundle blob", string(blobData))
 		}
 		if password != testRecoveryPassword {
 			t.Fatalf("recoverAccount() password = %q, want %q", password, testRecoveryPassword)
 		}
 		return accounts.Material{
-			AccountID:    testAccountID,
-			LocalKeyPath: testAccountKeyPath(),
+			AccountID:    accountID,
+			LocalKeyPath: filepath.Join("local", "account", accountID+".key"),
 			PublicKey:    publicKey,
 			PrivateKey:   privateKey,
-			BlobData:     []byte(`{"blob":"data"}`),
+			BlobData:     recoveryBlobData,
 		}, nil
 	}
 
@@ -1397,10 +1904,19 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 			Port:              58103,
 			Reachable:         false,
 			RecoveryAvailable: true,
-			AccountID:         testAccountID,
-			AccountBlob:       []byte(`{"blob":"data"}`),
-			FirstSeen:         testBootstrapTimestamp,
-			Revision:          9,
+			AccountID:         accountID,
+			AccountBlob:       recoveryBlobData,
+			RecoveryBundle: recoveryBundleFixture(
+				testJoiningNodeID,
+				accountID,
+				buildSignedPeerFixture(t, privateKey, testBootstrapHost, 58103, accountID),
+				buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 9),
+				recoveryBlobData,
+				accounts.BuildPublicKeyFile(publicKey),
+				accountMetaData,
+			),
+			FirstSeen: testBootstrapTimestamp,
+			Revision:  9,
 		},
 	}
 	storePendingSession(session)
@@ -1408,17 +1924,11 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 		removePendingSession(testRecoverySessionID)
 	})
 
-	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
-	go func() {
-		var finalizeRequest bootstrapSessionFinalizeRequest
-		if err := json.NewDecoder(serverConn).Decode(&finalizeRequest); err != nil {
-			t.Errorf(testDecodeErrorFormat, err)
-			return
-		}
-		if err := json.NewEncoder(serverConn).Encode(bootstrapSessionFinalizeResponse{}); err != nil {
-			t.Errorf(testEncodeErrorFormat, err)
-		}
-	}()
+	writtenFiles := map[string][]byte{}
+	writeManagedFile = func(path string, data []byte, perm os.FileMode) error {
+		writtenFiles[path] = append([]byte(nil), data...)
+		return nil
+	}
 
 	result, err := Complete(testRecoverySessionID, testRecoveryPassword)
 	if err != nil {
@@ -1429,6 +1939,213 @@ func TestCompleteRecoversExistingAccountBlob(t *testing.T) {
 	}
 	if result.Reachable {
 		t.Fatal("Complete() Reachable = true, want false")
+	}
+	if string(writtenFiles[testPeerPath()]) == "" {
+		t.Fatal("Complete() did not restore peer data")
+	}
+	if string(writtenFiles[testMetaPath()]) == "" {
+		t.Fatal("Complete() did not restore meta data")
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsMissingBundleError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	session := &pendingSession{id: testRecoverySessionID, nodeID: testJoiningNodeID}
+	_, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword)
+	if err == nil || err.Error() != testRecoveryBundleMissingText {
+		t.Fatalf("restoreRecoveryCompletion() error = %v, want missing bundle", err)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsMissingAccountIDError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	session := recoverySessionForFixture(fixture)
+	session.response.AccountID = ""
+
+	_, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword)
+	if err == nil || err.Error() != testRecoveryAccountIDMissingText {
+		t.Fatalf("restoreRecoveryCompletion() error = %v, want missing account id", err)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsMissingBlobError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	session := recoverySessionForFixture(fixture)
+	session.response.RecoveryBundle = fixture.bundle[:4]
+
+	_, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword)
+	if err == nil || err.Error() != testRecoveryBlobDataMissingText {
+		t.Fatalf("restoreRecoveryCompletion() error = %v, want missing blob data", err)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsRecoverError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	wantErr := errors.New("recover failed")
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return accounts.Material{}, wantErr }
+
+	_, err := restoreRecoveryCompletion(testRecoverySessionID, recoverySessionForFixture(fixture), testRecoveryPassword)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf(testRestoreRecoveryWantErrorFormat, err, wantErr)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsAccountMismatchError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) {
+		material := fixture.material
+		material.AccountID = testOtherAccountID
+		return material, nil
+	}
+
+	_, err := restoreRecoveryCompletion(testRecoverySessionID, recoverySessionForFixture(fixture), testRecoveryPassword)
+	if err == nil || err.Error() != "recovery bundle account id does not match recovered account" {
+		t.Fatalf("restoreRecoveryCompletion() error = %v, want account mismatch", err)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsInvalidBundleError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	session := recoverySessionForFixture(fixture)
+	session.response.RecoveryBundle = recoveryBundleFixture(
+		testJoiningNodeID,
+		fixture.accountID,
+		[]byte(testInvalidJSON),
+		fixture.metaData,
+		fixture.blobData,
+		fixture.accountPubKeyData,
+		fixture.accountMetaData,
+	)
+
+	if _, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword); err == nil {
+		t.Fatal("restoreRecoveryCompletion() error = nil, want bundle validation failure")
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsWriteError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	wantErr := errors.New(testWriteFailedText)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
+	session := recoverySessionForFixture(fixture)
+	session.conn = &stubConn{}
+	storePendingSession(session)
+	t.Cleanup(func() { removePendingSession(testRecoverySessionID) })
+
+	if _, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword); !errors.Is(err, wantErr) {
+		t.Fatalf(testRestoreRecoveryWantErrorFormat, err, wantErr)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsLoadUsernameIndexError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	wantErr := errors.New("load username index failed")
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return nil, wantErr }
+	session := recoverySessionForFixture(fixture)
+	session.conn = &stubConn{}
+	session.response.UsernameHash = testAliceHashKey
+	storePendingSession(session)
+	t.Cleanup(func() { removePendingSession(testRecoverySessionID) })
+
+	if _, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword); !errors.Is(err, wantErr) {
+		t.Fatalf(testRestoreRecoveryWantErrorFormat, err, wantErr)
+	}
+}
+
+func TestRestoreRecoveryCompletionReturnsSaveUsernameIndexError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	wantErr := errors.New("save username index failed")
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
+	saveUsernameIndex = func(usernameIndex) error { return wantErr }
+	session := recoverySessionForFixture(fixture)
+	session.conn = &stubConn{}
+	session.response.UsernameHash = testAliceHashKey
+	storePendingSession(session)
+	t.Cleanup(func() { removePendingSession(testRecoverySessionID) })
+
+	if _, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword); !errors.Is(err, wantErr) {
+		t.Fatalf(testRestoreRecoveryWantErrorFormat, err, wantErr)
+	}
+}
+
+func TestRestoreRecoveryCompletionUpdatesUsernameIndex(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildRecoveryFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
+
+	saved := usernameIndex{}
+	saveUsernameIndex = func(index usernameIndex) error {
+		for key, value := range index {
+			saved[key] = append([]string(nil), value...)
+		}
+		return nil
+	}
+
+	session := recoverySessionForFixture(fixture)
+	session.conn = &stubConn{}
+	session.response.ObservedIPv4 = testBootstrapHost
+	session.response.Port = 58103
+	session.response.UsernameHash = testAliceHashKey
+	storePendingSession(session)
+
+	result, err := restoreRecoveryCompletion(testRecoverySessionID, session, testRecoveryPassword)
+	if err != nil {
+		t.Fatalf("restoreRecoveryCompletion() error = %v", err)
+	}
+	if got := saved.accountIDsForHash(testAliceHashKey); len(got) != 1 || got[0] != fixture.accountID {
+		t.Fatalf("saved username index = %#v, want [%q]", got, fixture.accountID)
+	}
+	if !strings.Contains(result.Message, "Recovered account") {
+		t.Fatalf("restoreRecoveryCompletion() message = %q, want recovery confirmation", result.Message)
+	}
+}
+
+func recoverySessionForFixture(fixture recoveryFixtureData) *pendingSession {
+	return &pendingSession{
+		id:     testRecoverySessionID,
+		nodeID: testJoiningNodeID,
+		response: bootstrapSessionStartResponse{
+			RecoveryAvailable: true,
+			AccountID:         fixture.accountID,
+			RecoveryBundle:    fixture.bundle,
+		},
 	}
 }
 
@@ -1517,9 +2234,11 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 		return errors.New(testWriteFailedText)
 	}
 
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
 	session := &pendingSession{
 		id:     testSessionID,
-		conn:   &stubConn{},
+		conn:   clientConn,
 		nodeID: testJoiningNodeID,
 		response: bootstrapSessionStartResponse{
 			ObservedIPv4: testBootstrapHost,
@@ -1530,6 +2249,7 @@ func TestCompleteReturnsWriteNetworkFilesError(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
+	go respondToFinalizeRequest(t, serverConn)
 
 	if _, err := Complete(testSessionID, testAccountPassword); err == nil || err.Error() != testWriteFailedText {
 		t.Fatalf(testCompleteWantErrorFormat, err, testWriteFailedText)
@@ -1641,38 +2361,29 @@ func TestRegisterSavesUsernameIndexAfterFinalize(t *testing.T) {
 	}
 }
 
-func TestLoginUsesUsernameIndexAndBlob(t *testing.T) {
+func TestLoginUsesBootstrapLookupAndFinalize(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	material := testBootstrapMaterial(t)
-	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {material.AccountID}}, nil
-	}
+	fixture := buildLoginFixture(t)
 	recoverAccount = func(blobData []byte, password string) (accounts.Material, error) {
-		if string(blobData) != `{"blob":"data"}` || password != testAccountPassword {
+		if string(blobData) != string(fixture.blobData) || password != testAccountPassword {
 			t.Fatalf("recoverAccount() args mismatch")
 		}
-		return material, nil
-	}
-	readManagedFile = func(path string) ([]byte, error) {
-		if path == accountBlobRelativePath(material.AccountID) {
-			return []byte(`{"blob":"data"}`), nil
-		}
-		return nil, os.ErrNotExist
+		return fixture.material, nil
 	}
 	saveUsernameIndex = func(index usernameIndex) error {
 		accountIDs := index.accountIDsForHash(accounts.UsernameHash("alice"))
-		if len(accountIDs) != 1 || accountIDs[0] != material.AccountID {
-			t.Fatalf("saveUsernameIndex() account ids = %#v, want [%q]", accountIDs, material.AccountID)
+		if len(accountIDs) != 1 || accountIDs[0] != fixture.accountID {
+			t.Fatalf("saveUsernameIndex() account ids = %#v, want [%q]", accountIDs, fixture.accountID)
 		}
 		return nil
 	}
 	saveLocalProfile = func(accountID, username string) (string, error) {
-		if accountID != material.AccountID || username != "alice" {
-			t.Fatalf(testSaveLocalProfileArgsFormat, accountID, username, material.AccountID, "alice")
+		if accountID != fixture.accountID || username != "alice" {
+			t.Fatalf(testSaveLocalProfileArgsFormat, accountID, username, fixture.accountID, "alice")
 		}
-		return filepath.Join("local", "account", material.AccountID+".profile"), nil
+		return filepath.Join("local", "account", fixture.accountID+".profile"), nil
 	}
 	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
 
@@ -1687,10 +2398,14 @@ func TestLoginUsesUsernameIndexAndBlob(t *testing.T) {
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	go respondToFinalizeRequest(t, serverConn)
+	go respondToLookupAndFinalizeRequest(t, serverConn, fixture)
 
-	if _, err := Login(testSessionID, "alice", testAccountPassword); err != nil {
+	result, err := Login(testSessionID, "alice", testAccountPassword)
+	if err != nil {
 		t.Fatalf("Login() error = %v", err)
+	}
+	if !result.Connected || result.AccountID != fixture.accountID {
+		t.Fatalf("Login() result = %#v, want connected account %q", result, fixture.accountID)
 	}
 }
 
@@ -1735,6 +2450,223 @@ func TestRecoverUsesCompletionPath(t *testing.T) {
 
 	if _, err := Recover(testSessionID, testAccountPassword); err != nil {
 		t.Fatalf("Recover() error = %v", err)
+	}
+}
+
+func TestRecoveryBundleMapHandlesErrorsAndSuccess(t *testing.T) {
+	if _, err := recoveryBundleMap(nil); err == nil || err.Error() != "recovery bundle is missing" {
+		t.Fatalf("recoveryBundleMap(nil) error = %v, want missing bundle", err)
+	}
+	if _, err := recoveryBundleMap([]recoveryBundleFile{{Path: " ", Data: []byte("x")}}); err == nil || err.Error() != "recovery bundle contains an empty path" {
+		t.Fatalf("recoveryBundleMap(blank path) error = %v, want blank path failure", err)
+	}
+	if _, err := recoveryBundleMap([]recoveryBundleFile{{Path: "path", Data: nil}}); err == nil || !strings.Contains(err.Error(), "recovery bundle file path is empty") {
+		t.Fatalf("recoveryBundleMap(empty data) error = %v, want empty file failure", err)
+	}
+
+	filesByPath, err := recoveryBundleMap([]recoveryBundleFile{{Path: "path", Data: []byte("data")}})
+	if err != nil {
+		t.Fatalf("recoveryBundleMap() error = %v", err)
+	}
+	if string(filesByPath["path"]) != "data" {
+		t.Fatalf("recoveryBundleMap()[path] = %q, want %q", string(filesByPath["path"]), "data")
+	}
+}
+
+func TestBuildRecoveryBundleHandlesMissingStateAndSuccess(t *testing.T) {
+	if got := buildRecoveryBundle("", existingNodeRecords{}); got != nil {
+		t.Fatalf("buildRecoveryBundle(blank node) = %#v, want nil", got)
+	}
+	if got := buildRecoveryBundle(testJoiningNodeID, existingNodeRecords{
+		NodeMeta: metaFile{AccountID: testAccountID},
+	}); got != nil {
+		t.Fatalf("buildRecoveryBundle(incomplete) = %#v, want nil", got)
+	}
+
+	fixture := buildRecoveryFixture(t)
+	got := buildRecoveryBundle(testJoiningNodeID, existingNodeRecords{
+		PeerData:          fixture.peerData,
+		NodeMetaData:      fixture.metaData,
+		AccountPubKeyData: fixture.accountPubKeyData,
+		AccountMetaData:   fixture.accountMetaData,
+		AccountBlob:       fixture.blobData,
+		NodeMeta:          metaFile{AccountID: fixture.accountID},
+	})
+	if len(got) != 5 {
+		t.Fatalf("len(buildRecoveryBundle()) = %d, want %d", len(got), 5)
+	}
+}
+
+func TestBuildAccountBundleHandlesMissingStateAndSuccess(t *testing.T) {
+	fixture := buildLoginFixture(t)
+
+	if got := buildAccountBundle("", fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData); got != nil {
+		t.Fatalf("buildAccountBundle(blank account) = %#v, want nil", got)
+	}
+	if got := buildAccountBundle(fixture.accountID, nil, fixture.accountMetaData, fixture.blobData); got != nil {
+		t.Fatalf(testBuildAccountBundleNilFormat, testMissingPubkeyText, got)
+	}
+	if got := buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, nil, fixture.blobData); got != nil {
+		t.Fatalf(testBuildAccountBundleNilFormat, testMissingMetaText, got)
+	}
+	if got := buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, nil); got != nil {
+		t.Fatalf(testBuildAccountBundleNilFormat, testMissingBlobText, got)
+	}
+
+	got := buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData)
+	if len(got) != 3 {
+		t.Fatalf("len(buildAccountBundle()) = %d, want %d", len(got), 3)
+	}
+}
+
+func TestValidateAccountBundleFilesReturnsMissingFileError(t *testing.T) {
+	fixture, filesByPath := buildAccountBundleValidationFixture(t)
+
+	cases := []struct {
+		name  string
+		files map[string][]byte
+		key   ed25519.PublicKey
+	}{
+		{name: testMissingPubkeyText, files: withoutRecoveryFile(filesByPath, accountPubKeyRelativePath(fixture.accountID)), key: fixture.publicKey},
+		{name: testMissingMetaText, files: withoutRecoveryFile(filesByPath, accountMetaRelativePath(fixture.accountID)), key: fixture.publicKey},
+		{name: testMissingBlobText, files: withoutRecoveryFile(filesByPath, accountBlobRelativePath(fixture.accountID)), key: fixture.publicKey},
+		{name: "pubkey mismatch", files: filesByPath, key: buildLoginFixture(t).publicKey},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertAccountBundleValidationFailure(t, fixture.accountID, tc.key, tc.files)
+		})
+	}
+}
+
+func TestValidateAccountBundleFilesReturnsInvalidDataError(t *testing.T) {
+	fixture, filesByPath := buildAccountBundleValidationFixture(t)
+
+	t.Run("invalid pubkey", func(t *testing.T) {
+		files := cloneRecoveryFiles(filesByPath)
+		files[accountPubKeyRelativePath(fixture.accountID)] = []byte(testInvalidBase64)
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
+	})
+
+	t.Run("invalid meta", func(t *testing.T) {
+		files := cloneRecoveryFiles(filesByPath)
+		files[accountMetaRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
+	})
+
+	t.Run("invalid blob", func(t *testing.T) {
+		files := cloneRecoveryFiles(filesByPath)
+		files[accountBlobRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
+	})
+
+	t.Run("blob pubkey mismatch", func(t *testing.T) {
+		other := buildLoginFixture(t)
+		files := cloneRecoveryFiles(filesByPath)
+		files[accountBlobRelativePath(fixture.accountID)] = other.blobData
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
+	})
+}
+
+func TestValidateAccountBundleFilesReturnsAccountMeta(t *testing.T) {
+	fixture, filesByPath := buildAccountBundleValidationFixture(t)
+
+	accountMeta, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, filesByPath)
+	if err != nil {
+		t.Fatalf("validateAccountBundleFiles() error = %v", err)
+	}
+	if accountMeta.UsernameHash != accounts.UsernameHash("alice") {
+		t.Fatalf("validateAccountBundleFiles().UsernameHash = %q, want %q", accountMeta.UsernameHash, accounts.UsernameHash("alice"))
+	}
+}
+
+func buildAccountBundleValidationFixture(t *testing.T) (recoveryFixtureData, map[string][]byte) {
+	t.Helper()
+
+	fixture := buildLoginFixture(t)
+	filesByPath, err := recoveryBundleMap(buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData))
+	if err != nil {
+		t.Fatalf("recoveryBundleMap(account bundle) error = %v", err)
+	}
+
+	return fixture, filesByPath
+}
+
+func assertAccountBundleValidationFailure(t *testing.T, accountID string, key ed25519.PublicKey, files map[string][]byte) {
+	t.Helper()
+
+	if _, err := validateAccountBundleFiles(accountID, key, files); err == nil {
+		t.Fatal("validateAccountBundleFiles() error = nil, want failure")
+	}
+}
+
+func TestValidateRecoveryBundleFilesReturnsMissingFileError(t *testing.T) {
+	fixture := buildRecoveryFixture(t)
+
+	cases := []struct {
+		name  string
+		files map[string][]byte
+		key   ed25519.PublicKey
+	}{
+		{name: "missing peer", files: withoutRecoveryFile(fixture.filesByPath, testPeerPath()), key: fixture.publicKey},
+		{name: testMissingMetaText, files: withoutRecoveryFile(fixture.filesByPath, testMetaPath()), key: fixture.publicKey},
+		{name: testMissingPubkeyText, files: withoutRecoveryFile(fixture.filesByPath, accountPubKeyRelativePath(fixture.accountID)), key: fixture.publicKey},
+		{name: "missing account meta", files: withoutRecoveryFile(fixture.filesByPath, accountMetaRelativePath(fixture.accountID)), key: fixture.publicKey},
+		{name: testMissingBlobText, files: withoutRecoveryFile(fixture.filesByPath, accountBlobRelativePath(fixture.accountID)), key: fixture.publicKey},
+		{name: "pubkey mismatch", files: fixture.filesByPath, key: buildRecoveryFixture(t).publicKey},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertRecoveryBundleValidationFailure(t, fixture.accountID, tc.key, tc.files)
+		})
+	}
+}
+
+func TestValidateRecoveryBundleFilesReturnsInvalidDataError(t *testing.T) {
+	fixture := buildRecoveryFixture(t)
+
+	cases := []struct {
+		name  string
+		files map[string][]byte
+	}{
+		{name: "invalid account meta", files: cloneRecoveryFiles(fixture.filesByPath)},
+		{name: "invalid blob", files: cloneRecoveryFiles(fixture.filesByPath)},
+		{name: "invalid pubkey", files: cloneRecoveryFiles(fixture.filesByPath)},
+		{name: "blob pubkey mismatch", files: cloneRecoveryFiles(fixture.filesByPath)},
+		{name: "invalid peer", files: cloneRecoveryFiles(fixture.filesByPath)},
+		{name: "invalid meta", files: cloneRecoveryFiles(fixture.filesByPath)},
+	}
+	cases[0].files[accountMetaRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
+	cases[1].files[accountBlobRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
+	cases[2].files[accountPubKeyRelativePath(fixture.accountID)] = []byte(testInvalidBase64)
+	cases[3].files[accountBlobRelativePath(fixture.accountID)] = buildRecoveryFixture(t).blobData
+	cases[4].files[testPeerPath()] = []byte(testInvalidJSON)
+	cases[5].files[testMetaPath()] = []byte(testInvalidJSON)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertRecoveryBundleValidationFailure(t, fixture.accountID, fixture.publicKey, tc.files)
+		})
+	}
+}
+
+func TestValidateRecoveryBundleFilesReturnsBundleData(t *testing.T) {
+	fixture := buildRecoveryFixture(t)
+
+	peerData, metaData, accountPubKeyData, accountMetaData, err := validateRecoveryBundleFiles(testJoiningNodeID, fixture.accountID, fixture.publicKey, fixture.filesByPath)
+	if err != nil {
+		t.Fatalf("validateRecoveryBundleFiles() error = %v", err)
+	}
+	if string(peerData) != string(fixture.peerData) || string(metaData) != string(fixture.metaData) || string(accountPubKeyData) != string(fixture.accountPubKeyData) || string(accountMetaData) != string(fixture.accountMetaData) {
+		t.Fatal("validateRecoveryBundleFiles() returned mismatched file data")
+	}
+}
+
+func assertRecoveryBundleValidationFailure(t *testing.T, accountID string, key ed25519.PublicKey, files map[string][]byte) {
+	t.Helper()
+
+	if _, _, _, _, err := validateRecoveryBundleFiles(testJoiningNodeID, accountID, key, files); err == nil {
+		t.Fatal("validateRecoveryBundleFiles() error = nil, want failure")
 	}
 }
 
@@ -1836,8 +2768,10 @@ func TestRegisterReturnsFinalizeError(t *testing.T) {
 	material := testBootstrapMaterial(t)
 	createAccount = func(string) (accounts.Material, error) { return material, nil }
 	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
-	wantErr := errors.New(testWriteFailedText)
-	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
+	writeManagedFile = func(string, []byte, os.FileMode) error {
+		t.Fatal("writeManagedFile() called during finalize failure")
+		return nil
+	}
 	saveUsernameIndex = func(usernameIndex) error {
 		t.Fatal("saveUsernameIndex() called during finalize failure")
 		return nil
@@ -1848,7 +2782,7 @@ func TestRegisterReturnsFinalizeError(t *testing.T) {
 	}
 	storePendingSession(&pendingSession{
 		id:       testSessionID,
-		conn:     &stubConn{},
+		conn:     &stubConn{readData: mustMarshalJSON(t, bootstrapSessionFinalizeResponse{Error: testFinalizeFailedText})},
 		nodeID:   testJoiningNodeID,
 		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
 	})
@@ -1856,8 +2790,8 @@ func TestRegisterReturnsFinalizeError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 
-	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
+	if _, err := Register(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != testFinalizeFailedText {
+		t.Fatalf(testRegisterWantErrorFormat, err, testFinalizeFailedText)
 	}
 }
 
@@ -1958,7 +2892,13 @@ func TestLoginReturnsUsernameIndexLoadError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	fixture := buildLoginFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountID: fixture.accountID, AccountBundle: buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData)})},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
@@ -1974,11 +2914,14 @@ func TestLoginReturnsMissingUsernameError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{Error: testUsernameDoesNotExistText})},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
 		t.Fatal("Login() error = nil, want username missing failure")
@@ -1989,53 +2932,58 @@ func TestLoginReturnsAmbiguousUsernameError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{Error: "username matches multiple accounts"})},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {testFirstIndexedAccountID, testSecondIndexedAccountID}}, nil
-	}
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
 		t.Fatal("Login() error = nil, want ambiguous username failure")
 	}
 }
 
-func TestLoginReturnsBlobMissingError(t *testing.T) {
+func TestLoginReturnsBundleBlobMissingError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	fixture := buildLoginFixture(t)
+	accountBundle := []recoveryBundleFile{
+		{Path: accountPubKeyRelativePath(fixture.accountID), Data: fixture.accountPubKeyData},
+		{Path: accountMetaRelativePath(fixture.accountID), Data: fixture.accountMetaData},
+	}
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountID: fixture.accountID, AccountBundle: accountBundle})},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
-	}
-	readManagedFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
-		t.Fatal("Login() error = nil, want blob missing failure")
+		t.Fatal("Login() error = nil, want account bundle blob failure")
 	}
 }
 
-func TestLoginReturnsBlobReadError(t *testing.T) {
+func TestLoginReturnsLookupDecodeError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: []byte(testInvalidJSON)},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
-	}
-	wantErr := errors.New("read failed")
-	readManagedFile = func(string) ([]byte, error) { return nil, wantErr }
 
-	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf(testLoginWantErrorFormat, err, wantErr)
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want lookup decode failure")
 	}
 }
 
@@ -2043,14 +2991,15 @@ func TestLoginReturnsRecoverError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	fixture := buildLoginFixture(t)
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountID: fixture.accountID, AccountBundle: buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData)})},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
-	}
-	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
 	wantErr := errors.New("recover failed")
 	recoverAccount = func([]byte, string) (accounts.Material, error) { return accounts.Material{}, wantErr }
 
@@ -2063,14 +3012,15 @@ func TestLoginReturnsRecoveredAccountMismatchError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	storePendingSession(&pendingSession{id: testSessionID, conn: &stubConn{}, nodeID: testJoiningNodeID})
+	fixture := buildLoginFixture(t)
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountID: fixture.accountID, AccountBundle: buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData)})},
+		nodeID: testJoiningNodeID,
+	})
 	t.Cleanup(func() {
 		removePendingSession(testSessionID)
 	})
-	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {testAccountID}}, nil
-	}
-	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
 	recoverAccount = func([]byte, string) (accounts.Material, error) {
 		return accounts.Material{AccountID: testOtherAccountID}, nil
 	}
@@ -2078,6 +3028,131 @@ func TestLoginReturnsRecoveredAccountMismatchError(t *testing.T) {
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
 		t.Fatal("Login() error = nil, want recovered account mismatch")
 	}
+}
+
+func TestLoginReturnsBlankLookupAccountIDError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountBundle: []recoveryBundleFile{{Path: "bundle/file", Data: []byte("x")}}})},
+		nodeID: testJoiningNodeID,
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != "bootstrap lookup did not return an account id" {
+		t.Fatalf("Login() error = %v, want blank account id failure", err)
+	}
+}
+
+func TestLoginReturnsLookupBundleMapError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountID: testAccountID, AccountBundle: []recoveryBundleFile{{Path: " ", Data: []byte("x")}}})},
+		nodeID: testJoiningNodeID,
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != "recovery bundle contains an empty path" {
+		t.Fatalf("Login() error = %v, want bundle map failure", err)
+	}
+}
+
+func TestLoginReturnsInvalidAccountBundleError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	other := buildLoginFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	storePendingSession(&pendingSession{
+		id:     testSessionID,
+		conn:   &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{AccountID: fixture.accountID, AccountBundle: buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, other.blobData)})},
+		nodeID: testJoiningNodeID,
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want account bundle validation failure")
+	}
+}
+
+func TestLoginReturnsUsernameHashMismatchError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	mismatchedMetaData, err := accounts.BuildMetaWithUsernameHash(fixture.accountID, fixture.publicKey, testBootstrapTimestamp, 1, accounts.UsernameHash("bob"), fixture.privateKey)
+	if err != nil {
+		t.Fatalf(testBuildMetaWithUsernameHashErrFmt, err)
+	}
+	storePendingSession(&pendingSession{
+		id: testSessionID,
+		conn: &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{
+			AccountID:     fixture.accountID,
+			AccountBundle: buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, mismatchedMetaData, fixture.blobData),
+		})},
+		nodeID: testJoiningNodeID,
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != "account lookup bundle username hash does not match requested username" {
+		t.Fatalf("Login() error = %v, want username hash mismatch failure", err)
+	}
+}
+
+func TestLookupBootstrapAccountHandlesErrors(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	t.Run("encode error removes session", func(t *testing.T) {
+		session := &pendingSession{id: testSessionID, conn: &stubConn{writeErr: errors.New(testWriteFailedText)}}
+		storePendingSession(session)
+		if _, err := lookupBootstrapAccount(testSessionID, session, accounts.UsernameHash("alice")); err == nil || err.Error() != testWriteFailedText {
+			t.Fatalf("lookupBootstrapAccount() error = %v, want write failure", err)
+		}
+		if _, ok := getPendingSession(testSessionID); ok {
+			t.Fatal("lookupBootstrapAccount() left pending session after encode error")
+		}
+	})
+
+	t.Run("decode error removes session", func(t *testing.T) {
+		session := &pendingSession{id: testSessionID, conn: &stubConn{readData: []byte(testInvalidJSON)}}
+		storePendingSession(session)
+		if _, err := lookupBootstrapAccount(testSessionID, session, accounts.UsernameHash("alice")); err == nil {
+			t.Fatal("lookupBootstrapAccount() error = nil, want decode failure")
+		}
+		if _, ok := getPendingSession(testSessionID); ok {
+			t.Fatal("lookupBootstrapAccount() left pending session after decode error")
+		}
+	})
+
+	t.Run("response error keeps session", func(t *testing.T) {
+		session := &pendingSession{id: testSessionID, conn: &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{Error: testUsernameDoesNotExistText})}}
+		storePendingSession(session)
+		t.Cleanup(func() {
+			removePendingSession(testSessionID)
+		})
+		if _, err := lookupBootstrapAccount(testSessionID, session, accounts.UsernameHash("alice")); err == nil || err.Error() != testUsernameDoesNotExistText {
+			t.Fatalf("lookupBootstrapAccount() error = %v, want response error", err)
+		}
+		if _, ok := getPendingSession(testSessionID); !ok {
+			t.Fatal("lookupBootstrapAccount() removed pending session on response error")
+		}
+	})
 }
 
 func TestLoadUsernameIndexCacheHandlesReadPaths(t *testing.T) {
@@ -2182,7 +3257,7 @@ func TestSaveUsernameIndexCacheReturnsWriteError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	wantErr := errors.New("write failed")
+	wantErr := errors.New(testWriteFailedText)
 	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
 
 	if err := saveUsernameIndexCache(usernameIndex{testAliceHashKey: {testAccountID}}); !errors.Is(err, wantErr) {
@@ -2802,6 +3877,42 @@ func TestLoadExistingAccountRecordsReturnsWithoutPubKey(t *testing.T) {
 	}
 }
 
+func TestLoadExistingAccountRecordsReturnsRawPubKeyReadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	accountID, _, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	wantErr := errors.New("raw pubkey read failed")
+	readCounts := map[string]int{}
+	readManagedFile = func(path string) ([]byte, error) {
+		readCounts[path]++
+		switch path {
+		case accountPubKeyRelativePath(accountID):
+			if readCounts[path] == 1 {
+				return accountPubKeyData, nil
+			}
+			return nil, wantErr
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	records := existingNodeRecords{
+		KnownNode: true,
+		NodeMeta: metaFile{
+			NodeID:    testJoiningNodeID,
+			AccountID: accountID,
+		},
+	}
+
+	if _, err := loadExistingAccountRecords(testJoiningNodeID, []byte("{}"), records); !errors.Is(err, wantErr) {
+		t.Fatalf(testLoadExistingAccountRecordsWantErrFmt, err, wantErr)
+	}
+}
+
 func TestLoadExistingAccountRecordsReturnsAccountMetaError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -2871,6 +3982,45 @@ func TestLoadExistingAccountRecordsReturnsWithoutAccountMeta(t *testing.T) {
 	}
 	if got.AccountMeta != (accounts.Meta{}) {
 		t.Fatalf("loadExistingAccountRecords() AccountMeta = %#v, want zero value", got.AccountMeta)
+	}
+}
+
+func TestLoadExistingAccountRecordsReturnsRawAccountMetaReadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	accountID, privateKey, _, accountPubKeyData, accountMetaData, err := buildAccountFixtures(testBootstrapTimestamp)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	wantErr := errors.New("raw account meta read failed")
+	readCounts := map[string]int{}
+	nodeMetaData := buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 1)
+	readManagedFile = func(path string) ([]byte, error) {
+		readCounts[path]++
+		switch path {
+		case accountPubKeyRelativePath(accountID):
+			return accountPubKeyData, nil
+		case accountMetaRelativePath(accountID):
+			if readCounts[path] == 1 {
+				return accountMetaData, nil
+			}
+			return nil, wantErr
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	records := existingNodeRecords{
+		KnownNode: true,
+		NodeMeta: metaFile{
+			NodeID:    testJoiningNodeID,
+			AccountID: accountID,
+		},
+	}
+
+	if _, err := loadExistingAccountRecords(testJoiningNodeID, nodeMetaData, records); !errors.Is(err, wantErr) {
+		t.Fatalf(testLoadExistingAccountRecordsWantErrFmt, err, wantErr)
 	}
 }
 
@@ -3653,6 +4803,126 @@ func testAccountMetaPath() string {
 	return filepath.Join("network", "accounts", testAccountID+metaFileSuffix)
 }
 
+type recoveryFixtureData struct {
+	accountID         string
+	publicKey         ed25519.PublicKey
+	privateKey        ed25519.PrivateKey
+	peerData          []byte
+	metaData          []byte
+	blobData          []byte
+	accountPubKeyData []byte
+	accountMetaData   []byte
+	bundle            []recoveryBundleFile
+	filesByPath       map[string][]byte
+	material          accounts.Material
+}
+
+func recoveryBundleFixture(nodeID, accountID string, peerData, metaData, blobData, accountPubKeyData, accountMetaData []byte) []recoveryBundleFile {
+	return []recoveryBundleFile{
+		{Path: peerRelativePath(nodeID), Data: peerData},
+		{Path: metaRelativePath(nodeID), Data: metaData},
+		{Path: accountPubKeyRelativePath(accountID), Data: accountPubKeyData},
+		{Path: accountMetaRelativePath(accountID), Data: accountMetaData},
+		{Path: accountBlobRelativePath(accountID), Data: blobData},
+	}
+}
+
+func buildRecoveryFixture(t *testing.T) recoveryFixtureData {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(testGenerateKeyErrorFormat, err)
+	}
+	accountID := accounts.AccountIDFromPublicKey(publicKey)
+	blobData, err := accounts.BuildBlob(accountID, publicKey, privateKey, testRecoveryPassword)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	accountPubKeyData := accounts.BuildPublicKeyFile(publicKey)
+	accountMetaData, err := accounts.BuildMetaWithUsernameHash(accountID, publicKey, testBootstrapTimestamp, 1, testAliceHashKey, privateKey)
+	if err != nil {
+		t.Fatalf(testBuildMetaWithUsernameHashErrFmt, err)
+	}
+	peerData := buildSignedPeerFixture(t, privateKey, testBootstrapHost, 58103, accountID)
+	metaData := buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 9)
+	bundle := recoveryBundleFixture(testJoiningNodeID, accountID, peerData, metaData, blobData, accountPubKeyData, accountMetaData)
+	filesByPath := map[string][]byte{}
+	for _, file := range bundle {
+		filesByPath[file.Path] = append([]byte(nil), file.Data...)
+	}
+
+	return recoveryFixtureData{
+		accountID:         accountID,
+		publicKey:         publicKey,
+		privateKey:        privateKey,
+		peerData:          peerData,
+		metaData:          metaData,
+		blobData:          blobData,
+		accountPubKeyData: accountPubKeyData,
+		accountMetaData:   accountMetaData,
+		bundle:            bundle,
+		filesByPath:       filesByPath,
+		material: accounts.Material{
+			AccountID:    accountID,
+			LocalKeyPath: filepath.Join("local", "account", accountID+".key"),
+			PublicKey:    publicKey,
+			PrivateKey:   privateKey,
+			BlobData:     blobData,
+		},
+	}
+}
+
+func buildLoginFixture(t *testing.T) recoveryFixtureData {
+	t.Helper()
+
+	aliceHash := accounts.UsernameHash("alice")
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(testGenerateKeyErrorFormat, err)
+	}
+	accountID := accounts.AccountIDFromPublicKey(publicKey)
+	blobData, err := accounts.BuildBlob(accountID, publicKey, privateKey, testAccountPassword)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	accountPubKeyData := accounts.BuildPublicKeyFile(publicKey)
+	accountMetaData, err := accounts.BuildMetaWithUsernameHash(accountID, publicKey, testBootstrapTimestamp, 1, aliceHash, privateKey)
+	if err != nil {
+		t.Fatalf(testBuildMetaWithUsernameHashErrFmt, err)
+	}
+
+	return recoveryFixtureData{
+		accountID:         accountID,
+		publicKey:         publicKey,
+		privateKey:        privateKey,
+		blobData:          blobData,
+		accountPubKeyData: accountPubKeyData,
+		accountMetaData:   accountMetaData,
+		material: accounts.Material{
+			AccountID:    accountID,
+			LocalKeyPath: filepath.Join("local", "account", accountID+".key"),
+			PublicKey:    publicKey,
+			PrivateKey:   privateKey,
+			BlobData:     blobData,
+		},
+	}
+}
+
+func cloneRecoveryFiles(files map[string][]byte) map[string][]byte {
+	cloned := make(map[string][]byte, len(files))
+	for path, data := range files {
+		cloned[path] = append([]byte(nil), data...)
+	}
+	return cloned
+}
+
+func withoutRecoveryFile(files map[string][]byte, path string) map[string][]byte {
+	cloned := cloneRecoveryFiles(files)
+	delete(cloned, path)
+	return cloned
+}
+
 func testBootstrapMaterial(t *testing.T) accounts.Material {
 	t.Helper()
 
@@ -3695,6 +4965,52 @@ func respondToFinalizeRequest(t *testing.T, serverConn net.Conn) {
 		MetaFile:        testMetaPath(),
 		AccountBlobFile: testAccountBlobPath(),
 	}); err != nil {
+		t.Errorf(testEncodeErrorFormat, err)
+	}
+}
+
+func respondToLookupAndFinalizeRequest(t *testing.T, serverConn net.Conn, fixture recoveryFixtureData) {
+	t.Helper()
+
+	aliceHash := accounts.UsernameHash("alice")
+	var lookupRequest bootstrapSessionLookupRequest
+	if err := json.NewDecoder(serverConn).Decode(&lookupRequest); err != nil {
+		t.Errorf("Decode(lookup request) error = %v", err)
+		return
+	}
+	if lookupRequest.Type != "lookup" || lookupRequest.UsernameHash != aliceHash {
+		t.Errorf("lookupRequest = %#v, want lookup hash %q", lookupRequest, aliceHash)
+		return
+	}
+	if err := json.NewEncoder(serverConn).Encode(bootstrapSessionLookupResponse{
+		AccountID:        fixture.accountID,
+		UsernameHash:     aliceHash,
+		AccountBundle:    buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData),
+		AccountCreatedAt: testBootstrapTimestamp,
+		AccountRevision:  2,
+	}); err != nil {
+		t.Errorf(testEncodeErrorFormat, err)
+		return
+	}
+
+	var finalizeRequest bootstrapSessionFinalizeRequest
+	if err := json.NewDecoder(serverConn).Decode(&finalizeRequest); err != nil {
+		t.Errorf(testDecodeErrorFormat, err)
+		return
+	}
+	if finalizeRequest.NodeID != testJoiningNodeID {
+		t.Errorf("finalizeRequest.NodeID = %q, want %q", finalizeRequest.NodeID, testJoiningNodeID)
+	}
+	if finalizeRequest.AccountID != fixture.accountID {
+		t.Errorf("finalizeRequest.AccountID = %q, want %q", finalizeRequest.AccountID, fixture.accountID)
+	}
+	if len(finalizeRequest.AccountPubKey) == 0 {
+		t.Error("finalizeRequest.AccountPubKey = empty, want populated data")
+	}
+	if len(finalizeRequest.AccountMeta) == 0 {
+		t.Error("finalizeRequest.AccountMeta = empty, want populated data")
+	}
+	if err := json.NewEncoder(serverConn).Encode(bootstrapSessionFinalizeResponse{}); err != nil {
 		t.Errorf(testEncodeErrorFormat, err)
 	}
 }

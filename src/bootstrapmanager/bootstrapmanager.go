@@ -27,16 +27,18 @@ import (
 )
 
 const (
-	BootstrapListURL       = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/bootstrap-list.yaml"
-	peerFileSuffix         = ".peer"
-	metaFileSuffix         = ".meta"
-	pubkeyFileSuffix       = ".pubkey"
-	accountBlobFileSuffix  = ".blob"
-	probeTimeout           = 1500 * time.Millisecond
-	DefaultPort            = 58103
-	bootstrapSessionTTL    = 2 * time.Minute
-	bootstrapSessionIDSize = 16
-	usernameIndexPath      = "cache/username-index.map"
+	BootstrapListURL         = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/bootstrap-list.yaml"
+	peerFileSuffix           = ".peer"
+	metaFileSuffix           = ".meta"
+	pubkeyFileSuffix         = ".pubkey"
+	accountBlobFileSuffix    = ".blob"
+	probeTimeout             = 1500 * time.Millisecond
+	DefaultPort              = 58103
+	bootstrapSessionTTL      = 2 * time.Minute
+	bootstrapSessionIDSize   = 16
+	usernameIndexPath        = "cache/username-index.map"
+	accountBundleMissingFmt  = "account bundle is missing %s"
+	recoveryBundleMissingFmt = "recovery bundle is missing %s"
 )
 
 type Node struct {
@@ -138,18 +140,38 @@ type bootstrapSessionStartRequest struct {
 }
 
 type bootstrapSessionStartResponse struct {
-	ObservedIPv4      string `json:"observedIPv4"`
-	Port              int    `json:"port"`
-	Reachable         bool   `json:"reachable"`
-	RecoveryAvailable bool   `json:"recoveryAvailable"`
-	AccountID         string `json:"accountId"`
-	UsernameHash      string `json:"usernameHash,omitempty"`
-	AccountBlob       []byte `json:"accountBlob,omitempty"`
-	FirstSeen         string `json:"firstSeen"`
-	Revision          int    `json:"revision"`
-	AccountCreatedAt  string `json:"accountCreatedAt"`
-	AccountRevision   int    `json:"accountRevision"`
-	Error             string `json:"error"`
+	ObservedIPv4      string               `json:"observedIPv4"`
+	Port              int                  `json:"port"`
+	Reachable         bool                 `json:"reachable"`
+	RecoveryAvailable bool                 `json:"recoveryAvailable"`
+	AccountID         string               `json:"accountId"`
+	UsernameHash      string               `json:"usernameHash,omitempty"`
+	AccountBlob       []byte               `json:"accountBlob,omitempty"`
+	RecoveryBundle    []recoveryBundleFile `json:"recoveryBundle,omitempty"`
+	FirstSeen         string               `json:"firstSeen"`
+	Revision          int                  `json:"revision"`
+	AccountCreatedAt  string               `json:"accountCreatedAt"`
+	AccountRevision   int                  `json:"accountRevision"`
+	Error             string               `json:"error"`
+}
+
+type bootstrapSessionLookupRequest struct {
+	Type         string `json:"type"`
+	UsernameHash string `json:"usernameHash"`
+}
+
+type bootstrapSessionLookupResponse struct {
+	AccountID        string               `json:"accountId"`
+	UsernameHash     string               `json:"usernameHash,omitempty"`
+	AccountBundle    []recoveryBundleFile `json:"accountBundle,omitempty"`
+	AccountCreatedAt string               `json:"accountCreatedAt"`
+	AccountRevision  int                  `json:"accountRevision"`
+	Error            string               `json:"error"`
+}
+
+type recoveryBundleFile struct {
+	Path string `json:"path"`
+	Data []byte `json:"data"`
 }
 
 type bootstrapSessionFinalizeRequest struct {
@@ -179,11 +201,15 @@ type pendingSession struct {
 }
 
 type existingNodeRecords struct {
-	NodeMeta      metaFile
-	AccountMeta   accounts.Meta
-	AccountPubKey ed25519.PublicKey
-	AccountBlob   []byte
-	KnownNode     bool
+	PeerData          []byte
+	NodeMetaData      []byte
+	AccountPubKeyData []byte
+	AccountMetaData   []byte
+	NodeMeta          metaFile
+	AccountMeta       accounts.Meta
+	AccountPubKey     ed25519.PublicKey
+	AccountBlob       []byte
+	KnownNode         bool
 }
 
 type usernameIndex map[string][]string
@@ -546,6 +572,10 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 		return ConnectResult{}, err
 	}
 
+	if session.response.RecoveryAvailable {
+		return restoreRecoveryCompletion(sessionID, session, password)
+	}
+
 	material, err := completionMaterial(session.response, password)
 	if err != nil {
 		return ConnectResult{}, err
@@ -607,26 +637,23 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, err
 	}
 
-	index, err := loadUsernameIndex()
+	lookupResponse, err := lookupBootstrapAccount(sessionID, session, usernameHash)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	filesByPath, err := recoveryBundleMap(lookupResponse.AccountBundle)
 	if err != nil {
 		return ConnectResult{}, err
 	}
 
-	accountIDs := index.accountIDsForHash(usernameHash)
-	if len(accountIDs) == 0 {
-		return ConnectResult{}, errors.New("username does not exist")
+	accountID := strings.TrimSpace(lookupResponse.AccountID)
+	if accountID == "" {
+		return ConnectResult{}, errors.New("bootstrap lookup did not return an account id")
 	}
-	if len(accountIDs) > 1 {
-		return ConnectResult{}, errors.New("username matches multiple accounts")
-	}
-	accountID := accountIDs[0]
 
-	blobData, err := readManagedFile(accountBlobRelativePath(accountID))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ConnectResult{}, errors.New("account blob for username was not found locally")
-		}
-		return ConnectResult{}, err
+	blobData, ok := filesByPath[accountBlobRelativePath(accountID)]
+	if !ok {
+		return ConnectResult{}, errors.New("account lookup bundle is missing account blob data")
 	}
 
 	material, err := recoverAccount(blobData, password)
@@ -637,6 +664,23 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, errors.New("username account mapping does not match recovered account")
 	}
 
+	accountMeta, err := validateAccountBundleFiles(accountID, material.PublicKey, filesByPath)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	if strings.TrimSpace(accountMeta.UsernameHash) != usernameHash {
+		return ConnectResult{}, errors.New("account lookup bundle username hash does not match requested username")
+	}
+
+	session.response.AccountID = accountID
+	session.response.UsernameHash = firstNonEmpty(lookupResponse.UsernameHash, usernameHash)
+	session.response.AccountCreatedAt = lookupResponse.AccountCreatedAt
+	session.response.AccountRevision = lookupResponse.AccountRevision
+
+	index, err := loadUsernameIndex()
+	if err != nil {
+		return ConnectResult{}, err
+	}
 	return finalizeUsernameCompletion(sessionID, session, material, normalizedUsername, usernameHash, index, "Logged in as %s (%s). %s")
 }
 
@@ -656,9 +700,95 @@ func finalizeUsernameCompletion(sessionID string, session *pendingSession, mater
 	return result, nil
 }
 
+func lookupBootstrapAccount(sessionID string, session *pendingSession, usernameHash string) (bootstrapSessionLookupResponse, error) {
+	request := bootstrapSessionLookupRequest{
+		Type:         "lookup",
+		UsernameHash: usernameHash,
+	}
+	if err := json.NewEncoder(session.conn).Encode(request); err != nil {
+		removePendingSession(sessionID)
+		return bootstrapSessionLookupResponse{}, err
+	}
+
+	var response bootstrapSessionLookupResponse
+	if err := json.NewDecoder(session.conn).Decode(&response); err != nil {
+		removePendingSession(sessionID)
+		return bootstrapSessionLookupResponse{}, err
+	}
+	if response.Error != "" {
+		return bootstrapSessionLookupResponse{}, errors.New(response.Error)
+	}
+
+	return response, nil
+}
+
+func restoreRecoveryCompletion(sessionID string, session *pendingSession, password string) (ConnectResult, error) {
+	filesByPath, err := recoveryBundleMap(session.response.RecoveryBundle)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	accountID := strings.TrimSpace(session.response.AccountID)
+	if accountID == "" {
+		return ConnectResult{}, errors.New("recovery bundle did not include an account id")
+	}
+
+	blobData, ok := filesByPath[accountBlobRelativePath(accountID)]
+	if !ok {
+		return ConnectResult{}, errors.New("recovery bundle is missing account blob data")
+	}
+
+	material, err := recoverAccount(blobData, password)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	if material.AccountID != accountID {
+		return ConnectResult{}, errors.New("recovery bundle account id does not match recovered account")
+	}
+
+	peerData, metaData, accountPubKeyData, accountMetaData, err := validateRecoveryBundleFiles(session.nodeID, material.AccountID, material.PublicKey, filesByPath)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	peerPath, metaPath, accountBlobPath, err := writeNetworkFiles(
+		session.nodeID,
+		material.AccountID,
+		peerData,
+		metaData,
+		blobData,
+		accountPubKeyData,
+		accountMetaData,
+	)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	if usernameHash := strings.TrimSpace(session.response.UsernameHash); usernameHash != "" {
+		index, err := loadUsernameIndex()
+		if err != nil {
+			return ConnectResult{}, err
+		}
+		index.add(usernameHash, material.AccountID)
+		if err := saveUsernameIndex(index); err != nil {
+			return ConnectResult{}, err
+		}
+	}
+
+	removePendingSession(sessionID)
+
+	result := completedConnectResult(session, material, peerPath, metaPath, accountBlobPath)
+	result.Message = fmt.Sprintf("Recovered account %s and restored %s, %s, %s, and %s.", material.AccountID, material.LocalKeyPath, peerPath, metaPath, accountBlobPath)
+	return result, nil
+}
+
 func finalizeCompletion(sessionID string, session *pendingSession, material accounts.Material, usernameHash string) (ConnectResult, error) {
 	artifacts, err := buildCompletionArtifacts(session, material, usernameHash)
 	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	if err := finalizeBootstrapSession(sessionID, session, material, artifacts); err != nil {
 		return ConnectResult{}, err
 	}
 
@@ -672,10 +802,6 @@ func finalizeCompletion(sessionID string, session *pendingSession, material acco
 		artifacts.accountMetaData,
 	)
 	if err != nil {
-		return ConnectResult{}, err
-	}
-
-	if err := finalizeBootstrapSession(sessionID, session, material, artifacts); err != nil {
 		return ConnectResult{}, err
 	}
 
@@ -748,6 +874,26 @@ func containsAccountID(accountIDs []string, accountID string) bool {
 	}
 
 	return false
+}
+
+func recoveryBundleMap(bundle []recoveryBundleFile) (map[string][]byte, error) {
+	if len(bundle) == 0 {
+		return nil, errors.New("recovery bundle is missing")
+	}
+
+	filesByPath := make(map[string][]byte, len(bundle))
+	for _, file := range bundle {
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			return nil, errors.New("recovery bundle contains an empty path")
+		}
+		if len(file.Data) == 0 {
+			return nil, fmt.Errorf("recovery bundle file %s is empty", path)
+		}
+		filesByPath[path] = append([]byte(nil), file.Data...)
+	}
+
+	return filesByPath, nil
 }
 
 func loadUsernameIndexCache() (usernameIndex, error) {
@@ -986,29 +1132,97 @@ func handleBootstrapConnection(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(currentTime().Add(bootstrapSessionTTL))
 
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	startRequest, ok := decodeBootstrapStartRequest(decoder)
+	if !ok {
+		return
+	}
+	if !writeBootstrapStartResponse(encoder, conn.RemoteAddr(), startRequest) {
+		return
+	}
+	serveBootstrapSession(decoder, encoder)
+}
+
+func decodeBootstrapStartRequest(decoder *json.Decoder) (bootstrapSessionStartRequest, bool) {
 	var startRequest bootstrapSessionStartRequest
-	if err := json.NewDecoder(conn).Decode(&startRequest); err != nil {
-		return
+	if err := decoder.Decode(&startRequest); err != nil {
+		return bootstrapSessionStartRequest{}, false
 	}
 
-	startResponse := buildBootstrapStartResponse(conn.RemoteAddr(), startRequest)
-	if err := json.NewEncoder(conn).Encode(startResponse); err != nil {
-		return
-	}
-	if startResponse.Error != "" {
-		return
+	return startRequest, true
+}
+
+func writeBootstrapStartResponse(encoder *json.Encoder, remoteAddr net.Addr, startRequest bootstrapSessionStartRequest) bool {
+	startResponse := buildBootstrapStartResponse(remoteAddr, startRequest)
+	if err := encoder.Encode(startResponse); err != nil {
+		return false
 	}
 
+	return startResponse.Error == ""
+}
+
+func serveBootstrapSession(decoder *json.Decoder, encoder *json.Encoder) {
+	for {
+		if !handleBootstrapSessionRequest(decoder, encoder) {
+			return
+		}
+	}
+}
+
+func handleBootstrapSessionRequest(decoder *json.Decoder, encoder *json.Encoder) bool {
+	rawRequest, requestType, ok := decodeBootstrapSessionRequest(decoder)
+	if !ok {
+		return false
+	}
+
+	switch requestType {
+	case "lookup":
+		return handleBootstrapLookupRequest(rawRequest, encoder)
+	case "finalize":
+		return handleBootstrapFinalizeRequest(rawRequest, encoder)
+	default:
+		return false
+	}
+}
+
+func decodeBootstrapSessionRequest(decoder *json.Decoder) (json.RawMessage, string, bool) {
+	var rawRequest json.RawMessage
+	if err := decoder.Decode(&rawRequest); err != nil {
+		return nil, "", false
+	}
+
+	var requestType struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(rawRequest, &requestType); err != nil {
+		return nil, "", false
+	}
+
+	return rawRequest, strings.TrimSpace(requestType.Type), true
+}
+
+func handleBootstrapLookupRequest(rawRequest json.RawMessage, encoder *json.Encoder) bool {
+	var lookupRequest bootstrapSessionLookupRequest
+	if err := json.Unmarshal(rawRequest, &lookupRequest); err != nil {
+		return false
+	}
+
+	return encoder.Encode(buildBootstrapLookupResponse(lookupRequest)) == nil
+}
+
+func handleBootstrapFinalizeRequest(rawRequest json.RawMessage, encoder *json.Encoder) bool {
 	var finalizeRequest bootstrapSessionFinalizeRequest
-	if err := json.NewDecoder(conn).Decode(&finalizeRequest); err != nil {
-		return
+	if err := json.Unmarshal(rawRequest, &finalizeRequest); err != nil {
+		return false
 	}
 
 	response := bootstrapSessionFinalizeResponse{}
 	if err := validateFinalizeRequest(finalizeRequest); err != nil {
 		response.Error = err.Error()
-		_ = json.NewEncoder(conn).Encode(response)
-		return
+		_ = encoder.Encode(response)
+		return false
 	}
 
 	peerPath, metaPath, blobPath, err := writeNetworkFiles(
@@ -1022,14 +1236,15 @@ func handleBootstrapConnection(conn net.Conn) {
 	)
 	if err != nil {
 		response.Error = err.Error()
-		_ = json.NewEncoder(conn).Encode(response)
-		return
+		_ = encoder.Encode(response)
+		return false
 	}
 
 	response.PeerFile = peerPath
 	response.MetaFile = metaPath
 	response.AccountBlobFile = blobPath
-	_ = json.NewEncoder(conn).Encode(response)
+	_ = encoder.Encode(response)
+	return false
 }
 
 func bootstrapPortForNode(list bootstrapList, localNodeID string) (int, bool) {
@@ -1097,13 +1312,92 @@ func buildBootstrapStartResponse(remoteAddr net.Addr, request bootstrapSessionSt
 	if strings.TrimSpace(existingRecords.AccountMeta.UsernameHash) != "" {
 		response.UsernameHash = existingRecords.AccountMeta.UsernameHash
 	}
-	if strings.TrimSpace(existingRecords.NodeMeta.AccountID) != "" && len(existingRecords.AccountBlob) > 0 {
+	if recoveryBundle := buildRecoveryBundle(request.NodeID, existingRecords); strings.TrimSpace(existingRecords.NodeMeta.AccountID) != "" && len(recoveryBundle) > 0 {
 		response.RecoveryAvailable = true
 		response.AccountID = existingRecords.NodeMeta.AccountID
 		response.AccountBlob = existingRecords.AccountBlob
+		response.RecoveryBundle = recoveryBundle
 	}
 
 	return response
+}
+
+func buildBootstrapLookupResponse(request bootstrapSessionLookupRequest) bootstrapSessionLookupResponse {
+	usernameHash := strings.TrimSpace(request.UsernameHash)
+	if usernameHash == "" {
+		return bootstrapSessionLookupResponse{Error: "username hash is required"}
+	}
+
+	accountID, err := lookupAccountIDForUsernameHash(usernameHash)
+	if err != nil {
+		return bootstrapSessionLookupResponse{Error: err.Error()}
+	}
+	accountMeta, accountBundle, err := loadBootstrapLookupBundle(accountID)
+	if err != nil {
+		return bootstrapSessionLookupResponse{Error: err.Error()}
+	}
+
+	return bootstrapSessionLookupResponse{
+		AccountID:        accountID,
+		UsernameHash:     firstNonEmpty(accountMeta.UsernameHash, usernameHash),
+		AccountBundle:    accountBundle,
+		AccountCreatedAt: accountMeta.CreatedAt,
+		AccountRevision:  accountMeta.Revision + 1,
+	}
+}
+
+func lookupAccountIDForUsernameHash(usernameHash string) (string, error) {
+	index, err := loadUsernameIndex()
+	if err != nil {
+		return "", err
+	}
+
+	accountIDs := index.accountIDsForHash(usernameHash)
+	if len(accountIDs) == 0 {
+		return "", errors.New("username does not exist")
+	}
+	if len(accountIDs) > 1 {
+		return "", errors.New("username matches multiple accounts")
+	}
+
+	return accountIDs[0], nil
+}
+
+func loadBootstrapLookupBundle(accountID string) (accounts.Meta, []recoveryBundleFile, error) {
+	accountPubKey, hasPubKey, err := loadExistingAccountPubKey(accountID)
+	if err != nil {
+		return accounts.Meta{}, nil, err
+	}
+	if !hasPubKey {
+		return accounts.Meta{}, nil, errors.New("account public key for username was not found on bootstrap")
+	}
+
+	accountMeta, hasMeta, err := loadExistingAccountMeta(accountID, accountPubKey)
+	if err != nil {
+		return accounts.Meta{}, nil, err
+	}
+	if !hasMeta {
+		return accounts.Meta{}, nil, errors.New("account metadata for username was not found on bootstrap")
+	}
+
+	accountBlob, hasBlob, err := loadExistingAccountBlob(accountID, accountPubKey)
+	if err != nil {
+		return accounts.Meta{}, nil, err
+	}
+	if !hasBlob {
+		return accounts.Meta{}, nil, errors.New("account blob for username was not found on bootstrap")
+	}
+
+	accountPubKeyData, err := readManagedFile(accountPubKeyRelativePath(accountID))
+	if err != nil {
+		return accounts.Meta{}, nil, err
+	}
+	accountMetaData, err := readManagedFile(accountMetaRelativePath(accountID))
+	if err != nil {
+		return accounts.Meta{}, nil, err
+	}
+
+	return accountMeta, buildAccountBundle(accountID, accountPubKeyData, accountMetaData, accountBlob), nil
 }
 
 func loadExistingNodeRecords(nodeID string) (existingNodeRecords, error) {
@@ -1112,7 +1406,8 @@ func loadExistingNodeRecords(nodeID string) (existingNodeRecords, error) {
 		return existingNodeRecords{}, nil
 	}
 
-	if err := ensureKnownNodeExists(nodeID); err != nil {
+	peerData, err := ensureKnownNodeExists(nodeID)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return existingNodeRecords{}, nil
 		}
@@ -1127,7 +1422,7 @@ func loadExistingNodeRecords(nodeID string) (existingNodeRecords, error) {
 		return existingNodeRecords{KnownNode: true}, nil
 	}
 
-	records := existingNodeRecords{NodeMeta: existingMeta, KnownNode: true}
+	records := existingNodeRecords{PeerData: peerData, NodeMetaData: metaData, NodeMeta: existingMeta, KnownNode: true}
 	if strings.TrimSpace(existingMeta.AccountID) == "" {
 		return records, nil
 	}
@@ -1135,9 +1430,8 @@ func loadExistingNodeRecords(nodeID string) (existingNodeRecords, error) {
 	return loadExistingAccountRecords(nodeID, metaData, records)
 }
 
-func ensureKnownNodeExists(nodeID string) error {
-	_, err := readManagedFile(peerRelativePath(nodeID))
-	return err
+func ensureKnownNodeExists(nodeID string) ([]byte, error) {
+	return readManagedFile(peerRelativePath(nodeID))
 }
 
 func loadExistingNodeMeta(nodeID string) ([]byte, metaFile, bool, error) {
@@ -1166,6 +1460,11 @@ func loadExistingAccountRecords(nodeID string, metaData []byte, records existing
 		return records, nil
 	}
 	records.AccountPubKey = accountPubKey
+	accountPubKeyData, err := readManagedFile(accountPubKeyRelativePath(records.NodeMeta.AccountID))
+	if err != nil {
+		return existingNodeRecords{}, err
+	}
+	records.AccountPubKeyData = accountPubKeyData
 
 	accountMeta, hasAccountMeta, err := loadExistingAccountMeta(records.NodeMeta.AccountID, accountPubKey)
 	if err != nil {
@@ -1175,6 +1474,11 @@ func loadExistingAccountRecords(nodeID string, metaData []byte, records existing
 		return records, nil
 	}
 	records.AccountMeta = accountMeta
+	accountMetaData, err := readManagedFile(accountMetaRelativePath(records.NodeMeta.AccountID))
+	if err != nil {
+		return existingNodeRecords{}, err
+	}
+	records.AccountMetaData = accountMetaData
 
 	if err := verifyMetaFile(metaData, nodeID, records.NodeMeta.AccountID, accountPubKey); err != nil {
 		return existingNodeRecords{}, err
@@ -1189,6 +1493,140 @@ func loadExistingAccountRecords(nodeID string, metaData []byte, records existing
 	}
 
 	return records, nil
+}
+
+func buildRecoveryBundle(nodeID string, records existingNodeRecords) []recoveryBundleFile {
+	accountID := strings.TrimSpace(records.NodeMeta.AccountID)
+	if strings.TrimSpace(nodeID) == "" || accountID == "" {
+		return nil
+	}
+	if len(records.PeerData) == 0 || len(records.NodeMetaData) == 0 || len(records.AccountBlob) == 0 || len(records.AccountPubKeyData) == 0 || len(records.AccountMetaData) == 0 {
+		return nil
+	}
+
+	return []recoveryBundleFile{
+		{Path: peerRelativePath(nodeID), Data: append([]byte(nil), records.PeerData...)},
+		{Path: metaRelativePath(nodeID), Data: append([]byte(nil), records.NodeMetaData...)},
+		{Path: accountPubKeyRelativePath(accountID), Data: append([]byte(nil), records.AccountPubKeyData...)},
+		{Path: accountMetaRelativePath(accountID), Data: append([]byte(nil), records.AccountMetaData...)},
+		{Path: accountBlobRelativePath(accountID), Data: append([]byte(nil), records.AccountBlob...)},
+	}
+}
+
+func buildAccountBundle(accountID string, accountPubKeyData, accountMetaData, accountBlobData []byte) []recoveryBundleFile {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return nil
+	}
+	if len(accountPubKeyData) == 0 || len(accountMetaData) == 0 || len(accountBlobData) == 0 {
+		return nil
+	}
+
+	return []recoveryBundleFile{
+		{Path: accountPubKeyRelativePath(accountID), Data: append([]byte(nil), accountPubKeyData...)},
+		{Path: accountMetaRelativePath(accountID), Data: append([]byte(nil), accountMetaData...)},
+		{Path: accountBlobRelativePath(accountID), Data: append([]byte(nil), accountBlobData...)},
+	}
+}
+
+func requireBundleFile(filesByPath map[string][]byte, path, missingFormat string) ([]byte, error) {
+	data, ok := filesByPath[path]
+	if !ok {
+		return nil, fmt.Errorf(missingFormat, path)
+	}
+
+	return data, nil
+}
+
+func validateAccountBundleFiles(accountID string, publicKey ed25519.PublicKey, filesByPath map[string][]byte) (accounts.Meta, error) {
+	accountPubKeyPath := accountPubKeyRelativePath(accountID)
+	accountMetaPath := accountMetaRelativePath(accountID)
+	accountBlobPath := accountBlobRelativePath(accountID)
+
+	accountPubKeyData, err := requireBundleFile(filesByPath, accountPubKeyPath, accountBundleMissingFmt)
+	if err != nil {
+		return accounts.Meta{}, err
+	}
+	accountMetaData, err := requireBundleFile(filesByPath, accountMetaPath, accountBundleMissingFmt)
+	if err != nil {
+		return accounts.Meta{}, err
+	}
+	accountBlobData, err := requireBundleFile(filesByPath, accountBlobPath, accountBundleMissingFmt)
+	if err != nil {
+		return accounts.Meta{}, err
+	}
+
+	bundlePubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
+	if err != nil {
+		return accounts.Meta{}, err
+	}
+	if !bundlePubKey.Equal(publicKey) {
+		return accounts.Meta{}, errors.New("account bundle public key does not match recovered account")
+	}
+	accountMeta, err := accounts.VerifyMeta(accountID, bundlePubKey, accountMetaData)
+	if err != nil {
+		return accounts.Meta{}, err
+	}
+	if _, blobPublicKey, err := accounts.ValidateBlob(accountBlobData); err != nil {
+		return accounts.Meta{}, err
+	} else if !ed25519.PublicKey(blobPublicKey).Equal(bundlePubKey) {
+		return accounts.Meta{}, errors.New("account bundle account blob public key does not match trusted account pubkey")
+	}
+
+	return accountMeta, nil
+}
+
+func validateRecoveryBundleFiles(nodeID, accountID string, publicKey ed25519.PublicKey, filesByPath map[string][]byte) ([]byte, []byte, []byte, []byte, error) {
+	peerPath := peerRelativePath(nodeID)
+	metaPath := metaRelativePath(nodeID)
+	accountPubKeyPath := accountPubKeyRelativePath(accountID)
+	accountMetaPath := accountMetaRelativePath(accountID)
+	accountBlobPath := accountBlobRelativePath(accountID)
+
+	peerData, err := requireBundleFile(filesByPath, peerPath, recoveryBundleMissingFmt)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	metaData, err := requireBundleFile(filesByPath, metaPath, recoveryBundleMissingFmt)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	accountPubKeyData, err := requireBundleFile(filesByPath, accountPubKeyPath, recoveryBundleMissingFmt)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	accountMetaData, err := requireBundleFile(filesByPath, accountMetaPath, recoveryBundleMissingFmt)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	accountBlobData, err := requireBundleFile(filesByPath, accountBlobPath, recoveryBundleMissingFmt)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	bundlePubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if !bundlePubKey.Equal(publicKey) {
+		return nil, nil, nil, nil, errors.New("recovery bundle public key does not match recovered account")
+	}
+	if _, err := accounts.VerifyMeta(accountID, bundlePubKey, accountMetaData); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if _, blobPublicKey, err := accounts.ValidateBlob(accountBlobData); err != nil {
+		return nil, nil, nil, nil, err
+	} else if !ed25519.PublicKey(blobPublicKey).Equal(bundlePubKey) {
+		return nil, nil, nil, nil, errors.New("recovery bundle account blob public key does not match trusted account pubkey")
+	}
+	if err := verifyPeerFile(peerData, accountID, bundlePubKey); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := verifyMetaFile(metaData, nodeID, accountID, bundlePubKey); err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	return peerData, metaData, accountPubKeyData, accountMetaData, nil
 }
 
 func loadExistingAccountPubKey(accountID string) (ed25519.PublicKey, bool, error) {
