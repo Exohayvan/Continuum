@@ -65,6 +65,8 @@ const (
 	testLoadExistingNodeRecordsErrorFormat   = "loadExistingNodeRecords() error = %v"
 	testLoadExistingAccountRecordsWantErrFmt = "loadExistingAccountRecords() error = %v, want %v"
 	testVerifyPublicKeyFileErrorFormat       = "VerifyPublicKeyFile() error = %v"
+	testLoadLookupBundleWantErrFmt           = "loadBootstrapLookupBundle() error = %v, want %v"
+	testBuildAccountBundleNilFormat          = "buildAccountBundle(%s) = %#v, want nil"
 	testAccountID                            = "account-123"
 	testAccountPassword                      = "secret-pass"
 	testAccountKeyFile                       = "account-123.key"
@@ -1747,7 +1749,7 @@ func TestLoadBootstrapLookupBundleReturnsPubkeyLoadError(t *testing.T) {
 	readManagedFile = func(string) ([]byte, error) { return nil, wantErr }
 
 	if _, _, err := loadBootstrapLookupBundle(fixture.accountID); !errors.Is(err, wantErr) {
-		t.Fatalf("loadBootstrapLookupBundle() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoadLookupBundleWantErrFmt, err, wantErr)
 	}
 }
 
@@ -1769,7 +1771,7 @@ func TestLoadBootstrapLookupBundleReturnsMetaLoadError(t *testing.T) {
 	}
 
 	if _, _, err := loadBootstrapLookupBundle(fixture.accountID); !errors.Is(err, wantErr) {
-		t.Fatalf("loadBootstrapLookupBundle() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoadLookupBundleWantErrFmt, err, wantErr)
 	}
 }
 
@@ -1793,7 +1795,7 @@ func TestLoadBootstrapLookupBundleReturnsBlobLoadError(t *testing.T) {
 	}
 
 	if _, _, err := loadBootstrapLookupBundle(fixture.accountID); !errors.Is(err, wantErr) {
-		t.Fatalf("loadBootstrapLookupBundle() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoadLookupBundleWantErrFmt, err, wantErr)
 	}
 }
 
@@ -2496,13 +2498,13 @@ func TestBuildAccountBundleHandlesMissingStateAndSuccess(t *testing.T) {
 		t.Fatalf("buildAccountBundle(blank account) = %#v, want nil", got)
 	}
 	if got := buildAccountBundle(fixture.accountID, nil, fixture.accountMetaData, fixture.blobData); got != nil {
-		t.Fatalf("buildAccountBundle(%s) = %#v, want nil", testMissingPubkeyText, got)
+		t.Fatalf(testBuildAccountBundleNilFormat, testMissingPubkeyText, got)
 	}
 	if got := buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, nil, fixture.blobData); got != nil {
-		t.Fatalf("buildAccountBundle(%s) = %#v, want nil", testMissingMetaText, got)
+		t.Fatalf(testBuildAccountBundleNilFormat, testMissingMetaText, got)
 	}
 	if got := buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, nil); got != nil {
-		t.Fatalf("buildAccountBundle(%s) = %#v, want nil", testMissingBlobText, got)
+		t.Fatalf(testBuildAccountBundleNilFormat, testMissingBlobText, got)
 	}
 
 	got := buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData)
