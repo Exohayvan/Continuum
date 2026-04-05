@@ -21,9 +21,11 @@ import (
 const (
 	testNodeID             = "node-123"
 	testAccountID          = "account-123"
+	testOtherAccountID     = "other-account"
 	testPassword           = "secret-pass"
 	testSpacedAccountID    = " account-123 "
 	testProfileUsername    = "Alice"
+	testMetaCreatedAt      = "2026-04-02T00:00:00Z"
 	testInvalidBase64      = "not-base64"
 	testWriteFailed        = "write failed"
 	testBuildBlobFormat    = "BuildBlob() error = %v"
@@ -372,7 +374,7 @@ func TestBuildAndVerifyAccountTrustFiles(t *testing.T) {
 		t.Fatal("VerifyPublicKeyFile() returned a different public key")
 	}
 
-	metaData, err := BuildMeta(accountID, publicKey, "2026-04-02T00:00:00Z", 1, privateKey)
+	metaData, err := BuildMeta(accountID, publicKey, testMetaCreatedAt, 1, privateKey)
 	if err != nil {
 		t.Fatalf(testBuildMetaFormat, err)
 	}
@@ -395,7 +397,7 @@ func TestBuildAndVerifyAccountMetaWithUsernameHash(t *testing.T) {
 	}
 	accountID := AccountIDFromPublicKey(publicKey)
 
-	metaData, err := BuildMetaWithUsernameHash(accountID, publicKey, "2026-04-02T00:00:00Z", 1, UsernameHash("Alice"), privateKey)
+	metaData, err := BuildMetaWithUsernameHash(accountID, publicKey, testMetaCreatedAt, 1, UsernameHash("Alice"), privateKey)
 	if err != nil {
 		t.Fatalf(testBuildMetaFormat, err)
 	}
@@ -741,7 +743,7 @@ func TestVerifyMetaErrors(t *testing.T) {
 		t.Fatal("VerifyMeta() error = nil, want json failure")
 	}
 
-	metaData, err := BuildMeta(accountID, publicKey, "2026-04-02T00:00:00Z", 1, privateKey)
+	metaData, err := BuildMeta(accountID, publicKey, testMetaCreatedAt, 1, privateKey)
 	if err != nil {
 		t.Fatalf(testBuildMetaFormat, err)
 	}
@@ -750,11 +752,11 @@ func TestVerifyMetaErrors(t *testing.T) {
 		t.Fatalf(testUnmarshalFormat, err)
 	}
 
-	if _, err := VerifyMeta("other-account", publicKey, metaData); err == nil {
+	if _, err := VerifyMeta(testOtherAccountID, publicKey, metaData); err == nil {
 		t.Fatal("VerifyMeta() error = nil, want account mismatch")
 	}
 
-	meta.AccountID = "other-account"
+	meta.AccountID = testOtherAccountID
 	accountMismatchData := mustMarshalJSON(t, meta)
 	if _, err := VerifyMeta(accountID, publicKey, accountMismatchData); err == nil {
 		t.Fatal("VerifyMeta() error = nil, want public key/account mismatch")

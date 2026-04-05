@@ -1402,11 +1402,9 @@ func verifySignedPayload(payload any, signature string, publicKey ed25519.Public
 	if err != nil {
 		return err
 	}
-	decodedSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature))
-	if err != nil {
+	if decodedSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature)); err != nil {
 		return err
-	}
-	if !ed25519.Verify(publicKey, data, decodedSignature) {
+	} else if !ed25519.Verify(publicKey, data, decodedSignature) {
 		return errors.New("signature verification failed")
 	}
 

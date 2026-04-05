@@ -20,6 +20,7 @@ const (
 	testBootstrapHost   = "162.191.52.239"
 	testSessionID       = "session-123"
 	testPassword        = "super-secret"
+	testAccountID       = "account-123"
 	startupObserverText = "Startup() did not register updater status observer"
 )
 
@@ -282,7 +283,7 @@ func TestConnectBootstrapReturnsResolvedValue(t *testing.T) {
 		AwaitingPassword:  true,
 		RecoveryAvailable: true,
 		SessionID:         testSessionID,
-		AccountID:         "account-123",
+		AccountID:         testAccountID,
 		ObservedIPv4:      testBootstrapHost,
 		Port:              58103,
 		Reachable:         true,
@@ -312,14 +313,14 @@ func TestCompleteBootstrapReturnsResolvedValue(t *testing.T) {
 	originalCompleteBootstrap := completeBootstrap
 	want := bootstrapmanager.ConnectResult{
 		Connected:       true,
-		AccountID:       "account-123",
+		AccountID:       testAccountID,
 		ObservedIPv4:    testBootstrapHost,
 		Port:            58103,
 		Reachable:       true,
 		PeerFile:        "network/peers/node-123.peer",
 		MetaFile:        "network/peers/node-123.meta",
-		AccountBlobFile: "network/accounts/account-123.blob",
-		LocalKeyFile:    "local/account/account-123.key",
+		AccountBlobFile: "network/accounts/" + testAccountID + ".blob",
+		LocalKeyFile:    "local/account/" + testAccountID + ".key",
 		Message:         "bootstrap complete",
 	}
 	completeBootstrap = func(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
@@ -344,7 +345,7 @@ func TestCompleteBootstrapReturnsResolvedValue(t *testing.T) {
 
 func TestRecoverBootstrapAccountReturnsResolvedValue(t *testing.T) {
 	originalRecoverBootstrap := recoverBootstrap
-	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: "account-123"}
+	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: testAccountID}
 	recoverBootstrap = func(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
 		if sessionID != testSessionID || password != testPassword {
 			t.Fatalf("recoverBootstrap() args = (%q, %q), want (%q, %q)", sessionID, password, testSessionID, testPassword)
@@ -367,7 +368,7 @@ func TestRecoverBootstrapAccountReturnsResolvedValue(t *testing.T) {
 
 func TestLoginBootstrapAccountReturnsResolvedValue(t *testing.T) {
 	originalLoginBootstrap := loginBootstrap
-	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: "account-123"}
+	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: testAccountID}
 	loginBootstrap = func(sessionID, username, password string) (bootstrapmanager.ConnectResult, error) {
 		if sessionID != testSessionID || username != "alice" || password != testPassword {
 			t.Fatalf("loginBootstrap() args = (%q, %q, %q), want (%q, %q, %q)", sessionID, username, password, testSessionID, "alice", testPassword)
@@ -390,7 +391,7 @@ func TestLoginBootstrapAccountReturnsResolvedValue(t *testing.T) {
 
 func TestRegisterBootstrapAccountReturnsResolvedValue(t *testing.T) {
 	originalRegisterBootstrap := registerBootstrap
-	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: "account-123"}
+	want := bootstrapmanager.ConnectResult{Connected: true, AccountID: testAccountID}
 	registerBootstrap = func(sessionID, username, password string) (bootstrapmanager.ConnectResult, error) {
 		if sessionID != testSessionID || username != "alice" || password != testPassword {
 			t.Fatalf("registerBootstrap() args = (%q, %q, %q), want (%q, %q, %q)", sessionID, username, password, testSessionID, "alice", testPassword)

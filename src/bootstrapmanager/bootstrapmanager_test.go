@@ -52,6 +52,8 @@ const (
 	testConnectErrorFormat                   = "Connect() error = %v"
 	testConnectWantErrorFormat               = "Connect() error = %v, want %v"
 	testCompleteWantErrorFormat              = "Complete() error = %v, want %s"
+	testRegisterWantErrorFormat              = "Register() error = %v, want %v"
+	testLoginWantErrorFormat                 = "Login() error = %v, want %v"
 	testGenerateKeyErrorFormat               = "GenerateKey() error = %v"
 	testDefaultListenPortFormat              = "defaultListenPort() = %d, want %d"
 	testLoadExistingNodeRecordsErrorFormat   = "loadExistingNodeRecords() error = %v"
@@ -66,6 +68,8 @@ const (
 	testRecoveryPassword                     = "recovery-pass"
 	testRecoverySessionID                    = "session-recover"
 	testBootstrapNodeID                      = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
+	testOtherAccountID                       = "other-account"
+	testAliceHashKey                         = "hash-alice"
 	testInvalidJSON                          = "not-json"
 	testInvalidBase64                        = "not-base64"
 	testWriteFailedText                      = "write failed"
@@ -1703,7 +1707,7 @@ func TestRegisterReturnsCreateAccountError(t *testing.T) {
 	createAccount = func(string) (accounts.Material, error) { return accounts.Material{}, wantErr }
 
 	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -1722,7 +1726,7 @@ func TestRegisterReturnsUsernameIndexLoadError(t *testing.T) {
 	loadUsernameIndex = func() (usernameIndex, error) { return nil, wantErr }
 
 	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -1751,7 +1755,7 @@ func TestRegisterReturnsUsernameIndexSaveError(t *testing.T) {
 	go respondToFinalizeRequest(t, serverConn)
 
 	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -1807,7 +1811,7 @@ func TestLoginReturnsUsernameIndexLoadError(t *testing.T) {
 	loadUsernameIndex = func() (usernameIndex, error) { return nil, wantErr }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf("Login() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoginWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -1876,7 +1880,7 @@ func TestLoginReturnsBlobReadError(t *testing.T) {
 	readManagedFile = func(string) ([]byte, error) { return nil, wantErr }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf("Login() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoginWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -1896,7 +1900,7 @@ func TestLoginReturnsRecoverError(t *testing.T) {
 	recoverAccount = func([]byte, string) (accounts.Material, error) { return accounts.Material{}, wantErr }
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
-		t.Fatalf("Login() error = %v, want %v", err, wantErr)
+		t.Fatalf(testLoginWantErrorFormat, err, wantErr)
 	}
 }
 
@@ -1913,7 +1917,7 @@ func TestLoginReturnsRecoveredAccountMismatchError(t *testing.T) {
 	}
 	readManagedFile = func(string) ([]byte, error) { return []byte(`{"blob":"data"}`), nil }
 	recoverAccount = func([]byte, string) (accounts.Material, error) {
-		return accounts.Material{AccountID: "other-account"}, nil
+		return accounts.Material{AccountID: testOtherAccountID}, nil
 	}
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
@@ -1939,13 +1943,13 @@ func TestLoadUsernameIndexCacheHandlesReadPaths(t *testing.T) {
 		t.Fatalf("loadUsernameIndexCache() len = %d, want 0", len(index))
 	}
 
-	readManagedFile = func(string) ([]byte, error) { return []byte(`{"hash-alice":["account-1"]}`), nil }
+	readManagedFile = func(string) ([]byte, error) { return []byte(`{"` + testAliceHashKey + `":["account-1"]}`), nil }
 	index, err = loadUsernameIndexCache()
 	if err != nil {
 		t.Fatalf("loadUsernameIndexCache() success-path error = %v", err)
 	}
-	if got := index.accountIDsForHash("hash-alice"); len(got) != 1 || got[0] != "account-1" {
-		t.Fatalf("loadUsernameIndexCache() index[hash-alice] = %#v, want [account-1]", got)
+	if got := index.accountIDsForHash(testAliceHashKey); len(got) != 1 || got[0] != "account-1" {
+		t.Fatalf("loadUsernameIndexCache() index[%s] = %#v, want [account-1]", testAliceHashKey, got)
 	}
 
 	readManagedFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
@@ -1972,13 +1976,13 @@ func TestSaveUsernameIndexCachePersistsJSON(t *testing.T) {
 		if perm != 0o644 {
 			t.Fatalf("writeManagedFile() perm = %#o, want %#o", perm, 0o644)
 		}
-		if calls == 1 && !strings.Contains(string(data), `"hash-alice"`) {
+		if calls == 1 && !strings.Contains(string(data), `"`+testAliceHashKey+`"`) {
 			t.Fatalf("writeManagedFile() data = %s, want username index json", string(data))
 		}
 		return nil
 	}
 
-	if err := saveUsernameIndexCache(usernameIndex{"hash-alice": {testAccountID}}); err != nil {
+	if err := saveUsernameIndexCache(usernameIndex{testAliceHashKey: {testAccountID}}); err != nil {
 		t.Fatalf("saveUsernameIndexCache() error = %v", err)
 	}
 	if err := saveUsernameIndexCache(nil); err != nil {
@@ -1996,7 +2000,7 @@ func TestSaveUsernameIndexCacheReturnsWriteError(t *testing.T) {
 	wantErr := errors.New("write failed")
 	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
 
-	if err := saveUsernameIndexCache(usernameIndex{"hash-alice": {testAccountID}}); !errors.Is(err, wantErr) {
+	if err := saveUsernameIndexCache(usernameIndex{testAliceHashKey: {testAccountID}}); !errors.Is(err, wantErr) {
 		t.Fatalf("saveUsernameIndexCache() error = %v, want %v", err, wantErr)
 	}
 }
@@ -2998,7 +3002,7 @@ func TestVerifyPeerFileReturnsValidationErrors(t *testing.T) {
 	badAccountData, err := json.Marshal(peerFile{
 		IPv4:      testBootstrapHost,
 		PORT:      58103,
-		AccountID: "other-account",
+		AccountID: testOtherAccountID,
 		Signature: "bad",
 	})
 	if err != nil {
@@ -3064,7 +3068,7 @@ func TestVerifyMetaFileReturnsValidationErrors(t *testing.T) {
 
 	wrongAccount := mustMarshalJSON(t, metaFile{
 		NodeID:    testJoiningNodeID,
-		AccountID: "other-account",
+		AccountID: testOtherAccountID,
 		FirstSeen: testBootstrapTimestamp,
 		Revision:  1,
 		UpdatedAt: testBootstrapTimestamp,

@@ -276,23 +276,57 @@ async function connectBootstrapEndpoint(host, port, nodeID, label) {
     }
 }
 
+function accountCompletionInputs(mode) {
+    switch (mode) {
+        case "recover":
+            return {
+                username: "",
+                password: accountRecoveryPasswordElement.value,
+            };
+        case "login":
+            return {
+                username: accountLoginUsernameElement.value,
+                password: accountLoginPasswordElement.value,
+            };
+        default:
+            return {
+                username: accountRegisterUsernameElement.value,
+                password: accountRegisterPasswordElement.value,
+            };
+    }
+}
+
+function accountCompletionStatus(mode) {
+    if (mode === "recover") {
+        return "Recovering account...";
+    }
+
+    let action = "Registering";
+    if (mode === "login") {
+        action = "Logging in";
+    }
+
+    return `${action} account...`;
+}
+
+async function requestAccountCompletion(mode, username, password) {
+    if (mode === "recover") {
+        return appBridge.RecoverBootstrapAccount(pendingBootstrapSessionID, password);
+    }
+    if (mode === "login") {
+        return appBridge.LoginBootstrapAccount(pendingBootstrapSessionID, username, password);
+    }
+
+    return appBridge.RegisterBootstrapAccount(pendingBootstrapSessionID, username, password);
+}
+
 async function runAccountCompletion(mode) {
     if (!pendingBootstrapSessionID) {
         setBootstrapError("Start a bootstrap session before entering account credentials.");
         return;
     }
 
-    let username = "";
-    let password = "";
-    if (mode === "recover") {
-        password = accountRecoveryPasswordElement.value;
-    } else if (mode === "login") {
-        username = accountLoginUsernameElement.value;
-        password = accountLoginPasswordElement.value;
-    } else {
-        username = accountRegisterUsernameElement.value;
-        password = accountRegisterPasswordElement.value;
-    }
+    const { username, password } = accountCompletionInputs(mode);
 
     if (password.trim() === "") {
         setBootstrapError("A password is required.");
@@ -308,7 +342,7 @@ async function runAccountCompletion(mode) {
 
     connectingBootstrap = true;
     setBootstrapError("");
-    statusElement.textContent = mode === "recover" ? "Recovering account..." : `${mode === "login" ? "Logging in" : "Registering"} account...`;
+    statusElement.textContent = accountCompletionStatus(mode);
     bootstrapMetaElement.textContent = `Finalizing bootstrap session with ${pendingBootstrapLabel || "selected endpoint"}...`;
     bootstrapRefreshButton.disabled = true;
     bootstrapCustomConnectButton.disabled = true;
@@ -317,14 +351,7 @@ async function runAccountCompletion(mode) {
     accountRegisterSubmitButton.disabled = true;
 
     try {
-        let result;
-        if (mode === "recover") {
-            result = await appBridge.RecoverBootstrapAccount(pendingBootstrapSessionID, password);
-        } else if (mode === "login") {
-            result = await appBridge.LoginBootstrapAccount(pendingBootstrapSessionID, username, password);
-        } else {
-            result = await appBridge.RegisterBootstrapAccount(pendingBootstrapSessionID, username, password);
-        }
+        const result = await requestAccountCompletion(mode, username, password);
         pendingBootstrapSessionID = "";
         pendingBootstrapRecovery = false;
         bootstrapSelectionElement.textContent = result.message || "Bootstrap completed.";
