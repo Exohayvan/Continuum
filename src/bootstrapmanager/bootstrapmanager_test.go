@@ -2519,12 +2519,8 @@ func TestBuildAccountBundleHandlesMissingStateAndSuccess(t *testing.T) {
 	}
 }
 
-func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
-	fixture := buildLoginFixture(t)
-	filesByPath, err := recoveryBundleMap(buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData))
-	if err != nil {
-		t.Fatalf("recoveryBundleMap(account bundle) error = %v", err)
-	}
+func TestValidateAccountBundleFilesReturnsMissingFileError(t *testing.T) {
+	fixture, filesByPath := buildAccountBundleValidationFixture(t)
 
 	cases := []struct {
 		name  string
@@ -2538,54 +2534,70 @@ func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := validateAccountBundleFiles(fixture.accountID, tc.key, tc.files); err == nil {
-				t.Fatal("validateAccountBundleFiles() error = nil, want failure")
-			}
+			assertAccountBundleValidationFailure(t, fixture.accountID, tc.key, tc.files)
 		})
 	}
+}
+
+func TestValidateAccountBundleFilesReturnsInvalidDataError(t *testing.T) {
+	fixture, filesByPath := buildAccountBundleValidationFixture(t)
 
 	t.Run("invalid pubkey", func(t *testing.T) {
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountPubKeyRelativePath(fixture.accountID)] = []byte(testInvalidBase64)
-		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
-			t.Fatal("validateAccountBundleFiles() error = nil, want pubkey failure")
-		}
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
 	})
 
 	t.Run("invalid meta", func(t *testing.T) {
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountMetaRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
-		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
-			t.Fatal("validateAccountBundleFiles() error = nil, want meta failure")
-		}
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
 	})
 
 	t.Run("invalid blob", func(t *testing.T) {
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountBlobRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
-		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
-			t.Fatal("validateAccountBundleFiles() error = nil, want blob failure")
-		}
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
 	})
 
 	t.Run("blob pubkey mismatch", func(t *testing.T) {
 		other := buildLoginFixture(t)
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountBlobRelativePath(fixture.accountID)] = other.blobData
-		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
-			t.Fatal("validateAccountBundleFiles() error = nil, want blob pubkey mismatch")
-		}
+		assertAccountBundleValidationFailure(t, fixture.accountID, fixture.publicKey, files)
 	})
+}
 
-	t.Run("success", func(t *testing.T) {
-		accountMeta, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, filesByPath)
-		if err != nil {
-			t.Fatalf("validateAccountBundleFiles() error = %v", err)
-		}
-		if accountMeta.UsernameHash != accounts.UsernameHash("alice") {
-			t.Fatalf("validateAccountBundleFiles().UsernameHash = %q, want %q", accountMeta.UsernameHash, accounts.UsernameHash("alice"))
-		}
-	})
+func TestValidateAccountBundleFilesReturnsAccountMeta(t *testing.T) {
+	fixture, filesByPath := buildAccountBundleValidationFixture(t)
+
+	accountMeta, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, filesByPath)
+	if err != nil {
+		t.Fatalf("validateAccountBundleFiles() error = %v", err)
+	}
+	if accountMeta.UsernameHash != accounts.UsernameHash("alice") {
+		t.Fatalf("validateAccountBundleFiles().UsernameHash = %q, want %q", accountMeta.UsernameHash, accounts.UsernameHash("alice"))
+	}
+}
+
+func buildAccountBundleValidationFixture(t *testing.T) (recoveryFixtureData, map[string][]byte) {
+	t.Helper()
+
+	fixture := buildLoginFixture(t)
+	filesByPath, err := recoveryBundleMap(buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, fixture.accountMetaData, fixture.blobData))
+	if err != nil {
+		t.Fatalf("recoveryBundleMap(account bundle) error = %v", err)
+	}
+
+	return fixture, filesByPath
+}
+
+func assertAccountBundleValidationFailure(t *testing.T, accountID string, key ed25519.PublicKey, files map[string][]byte) {
+	t.Helper()
+
+	if _, err := validateAccountBundleFiles(accountID, key, files); err == nil {
+		t.Fatal("validateAccountBundleFiles() error = nil, want failure")
+	}
 }
 
 func TestValidateRecoveryBundleFilesReturnsMissingFileError(t *testing.T) {
