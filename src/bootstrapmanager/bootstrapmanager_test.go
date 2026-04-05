@@ -3067,6 +3067,65 @@ func TestVerifyMetaFileReturnsValidationErrors(t *testing.T) {
 	}
 }
 
+func TestBuildMetaFileUsesSnakeCaseFields(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(testGenerateKeyErrorFormat, err)
+	}
+
+	metaData, err := buildMetaFile(testJoiningNodeID, testAccountID, testBootstrapTimestamp, 1, privateKey)
+	if err != nil {
+		t.Fatalf("buildMetaFile() error = %v", err)
+	}
+
+	jsonText := string(metaData)
+	for _, wantedField := range []string{`"node_id"`, `"account_id"`, `"first_seen"`, `"updated_at"`, `"signature"`} {
+		if !strings.Contains(jsonText, wantedField) {
+			t.Fatalf("buildMetaFile() output missing %s: %s", wantedField, jsonText)
+		}
+	}
+	for _, legacyField := range []string{`"Node_ID"`, `"AccountID"`, `"First Seen"`, `"Updated At"`, `"Signature"`} {
+		if strings.Contains(jsonText, legacyField) {
+			t.Fatalf("buildMetaFile() output still contains legacy field %s: %s", legacyField, jsonText)
+		}
+	}
+}
+
+func TestVerifyMetaFileAcceptsLegacyFieldNames(t *testing.T) {
+	accountID, privateKey, _, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	accountPubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
+	if err != nil {
+		t.Fatalf(testVerifyPublicKeyFileErrorFormat, err)
+	}
+
+	unsigned := legacyUnsignedMetaFile{
+		NodeID:    testJoiningNodeID,
+		AccountID: accountID,
+		FirstSeen: testBootstrapTimestamp,
+		Revision:  1,
+		UpdatedAt: testUpdatedTimestamp,
+	}
+	signature, err := signPayload(privateKey, unsigned)
+	if err != nil {
+		t.Fatalf("signPayload() error = %v", err)
+	}
+
+	legacyData := mustMarshalJSON(t, legacyMetaFile{
+		NodeID:    unsigned.NodeID,
+		AccountID: unsigned.AccountID,
+		FirstSeen: unsigned.FirstSeen,
+		Revision:  unsigned.Revision,
+		UpdatedAt: unsigned.UpdatedAt,
+		Signature: signature,
+	})
+	if err := verifyMetaFile(legacyData, testJoiningNodeID, accountID, accountPubKey); err != nil {
+		t.Fatalf("verifyMetaFile() error = %v", err)
+	}
+}
+
 func TestVerifySignedPayloadReturnsErrors(t *testing.T) {
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

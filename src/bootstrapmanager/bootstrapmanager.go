@@ -98,6 +98,23 @@ type peerFile struct {
 }
 
 type unsignedMetaFile struct {
+	NodeID    string `json:"node_id"`
+	AccountID string `json:"account_id"`
+	FirstSeen string `json:"first_seen"`
+	Revision  int    `json:"revision"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type metaFile struct {
+	NodeID    string `json:"node_id"`
+	AccountID string `json:"account_id"`
+	FirstSeen string `json:"first_seen"`
+	Revision  int    `json:"revision"`
+	UpdatedAt string `json:"updated_at"`
+	Signature string `json:"signature"`
+}
+
+type legacyUnsignedMetaFile struct {
 	NodeID    string `json:"Node_ID"`
 	AccountID string `json:"AccountID"`
 	FirstSeen string `json:"First Seen"`
@@ -105,7 +122,7 @@ type unsignedMetaFile struct {
 	UpdatedAt string `json:"Updated At"`
 }
 
-type metaFile struct {
+type legacyMetaFile struct {
 	NodeID    string `json:"Node_ID"`
 	AccountID string `json:"AccountID"`
 	FirstSeen string `json:"First Seen"`
@@ -166,6 +183,28 @@ type existingNodeRecords struct {
 	AccountPubKey ed25519.PublicKey
 	AccountBlob   []byte
 	KnownNode     bool
+}
+
+func (file *metaFile) UnmarshalJSON(data []byte) error {
+	type metaFileAlias metaFile
+
+	var current metaFileAlias
+	if err := json.Unmarshal(data, &current); err != nil {
+		return err
+	}
+
+	var legacy legacyMetaFile
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+
+	file.NodeID = firstNonEmpty(current.NodeID, legacy.NodeID)
+	file.AccountID = firstNonEmpty(current.AccountID, legacy.AccountID)
+	file.FirstSeen = firstNonEmpty(current.FirstSeen, legacy.FirstSeen)
+	file.Revision = firstPositive(current.Revision, legacy.Revision)
+	file.UpdatedAt = firstNonEmpty(current.UpdatedAt, legacy.UpdatedAt)
+	file.Signature = firstNonEmpty(current.Signature, legacy.Signature)
+	return nil
 }
 
 var (
@@ -808,6 +847,26 @@ func completedConnectResult(session *pendingSession, material accounts.Material,
 	return result
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+
+	return 0
+}
+
 func startBootstrapService(ctx context.Context) error {
 	list, err := loadBootstrapList(ctx)
 	if err != nil {
@@ -1243,7 +1302,22 @@ func verifyMetaFile(data []byte, nodeID, accountID string, publicKey ed25519.Pub
 		Revision:  file.Revision,
 		UpdatedAt: file.UpdatedAt,
 	}
-	return verifySignedPayload(unsigned, file.Signature, publicKey)
+	if err := verifySignedPayload(unsigned, file.Signature, publicKey); err == nil {
+		return nil
+	} else {
+		legacyUnsigned := legacyUnsignedMetaFile{
+			NodeID:    file.NodeID,
+			AccountID: file.AccountID,
+			FirstSeen: file.FirstSeen,
+			Revision:  file.Revision,
+			UpdatedAt: file.UpdatedAt,
+		}
+		if legacyErr := verifySignedPayload(legacyUnsigned, file.Signature, publicKey); legacyErr == nil {
+			return nil
+		}
+
+		return err
+	}
 }
 
 func verifySignedPayload(payload any, signature string, publicKey ed25519.PublicKey) error {
