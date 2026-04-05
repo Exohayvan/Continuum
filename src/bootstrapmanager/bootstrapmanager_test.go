@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,7 @@ const (
 	testRecoveryPassword                     = "recovery-pass"
 	testRecoverySessionID                    = "session-recover"
 	testBootstrapNodeID                      = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
+	testBootstrapAccountID                   = "3d06879ec5324c32f157f9ce014997c95bef0b1f0dcd9261c2e778a983b0a009"
 	testOtherAccountID                       = "other-account"
 	testFirstIndexedAccountID                = "account-1"
 	testSecondIndexedAccountID               = "account-2"
@@ -401,7 +403,7 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return clientConn, nil
 	}
 
@@ -701,7 +703,19 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	listener, err := listenBootstrapEndpoint(0)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(testGenerateKeyErrorFormat, err)
+	}
+	accountID := accounts.AccountIDFromPublicKey(publicKey)
+	loadLocalAccountKey = func(gotAccountID string) (ed25519.PrivateKey, error) {
+		if gotAccountID != accountID {
+			t.Fatalf("loadLocalAccountKey() accountID = %q, want %q", gotAccountID, accountID)
+		}
+		return privateKey, nil
+	}
+
+	listener, err := listenBootstrapEndpoint(0, accountID)
 	if err != nil {
 		t.Fatalf("listenBootstrapEndpoint() error = %v", err)
 	}
@@ -714,12 +728,19 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 			done <- err
 			return
 		}
+		if tlsConn, ok := conn.(*tls.Conn); ok {
+			if err := tlsConn.Handshake(); err != nil {
+				_ = tlsConn.Close()
+				done <- err
+				return
+			}
+		}
 		_ = conn.Close()
 		done <- nil
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	conn, err := dialBootstrapEndpoint(context.Background(), testLoopbackHost, port)
+	conn, err := dialBootstrapEndpoint(context.Background(), testLoopbackHost, port, accountID)
 	if err != nil {
 		t.Fatalf("dialBootstrapEndpoint() error = %v", err)
 	}
@@ -727,6 +748,20 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 
 	if err := <-done; err != nil {
 		t.Fatalf("listener.Accept() error = %v", err)
+	}
+}
+
+func TestListenBootstrapEndpointReturnsLoadLocalKeyError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	wantErr := errors.New(testLoadFailedText)
+	loadLocalAccountKey = func(string) (ed25519.PrivateKey, error) {
+		return nil, wantErr
+	}
+
+	if _, err := listenBootstrapEndpoint(0, testBootstrapAccountID); !errors.Is(err, wantErr) {
+		t.Fatalf("listenBootstrapEndpoint() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -756,7 +791,7 @@ func TestConnectReturnsDialError(t *testing.T) {
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	wantErr := errors.New("dial failed")
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return nil, wantErr
 	}
 
@@ -772,10 +807,13 @@ func TestConnectUsesLoopbackForLocalBootstrapNode(t *testing.T) {
 	resolveNodeID = func() string { return testJoiningNodeID }
 	dialedHost := ""
 	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(_ context.Context, host string, port int) (net.Conn, error) {
+	dialBootstrap = func(_ context.Context, host string, port int, expectedAccountID string) (net.Conn, error) {
 		dialedHost = host
 		if port != 58103 {
 			t.Fatalf("dialBootstrap() port = %d, want %d", port, 58103)
+		}
+		if expectedAccountID != "" {
+			t.Fatalf("dialBootstrap() expectedAccountID = %q, want empty", expectedAccountID)
 		}
 		return clientConn, nil
 	}
@@ -805,13 +843,55 @@ func TestConnectUsesLoopbackForLocalBootstrapNode(t *testing.T) {
 	removePendingSession(result.SessionID)
 }
 
+func TestConnectUsesExpectedBootstrapAccountIDForListedBootstrap(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testJoiningNodeID }
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return loadBootstrapListFixture(t), nil
+	}
+
+	serverConn, clientConn := net.Pipe()
+	dialBootstrap = func(_ context.Context, host string, port int, expectedAccountID string) (net.Conn, error) {
+		if host != testBootstrapHost || port != 58103 {
+			t.Fatalf("dialBootstrap() args = (%q, %d), want (%q, %d)", host, port, testBootstrapHost, 58103)
+		}
+		if expectedAccountID != testBootstrapAccountID {
+			t.Fatalf("dialBootstrap() expectedAccountID = %q, want %q", expectedAccountID, testBootstrapAccountID)
+		}
+		return clientConn, nil
+	}
+
+	go func() {
+		defer serverConn.Close()
+		var request bootstrapSessionStartRequest
+		if err := json.NewDecoder(serverConn).Decode(&request); err != nil {
+			t.Errorf(testDecodeErrorFormat, err)
+			return
+		}
+		_ = json.NewEncoder(serverConn).Encode(bootstrapSessionStartResponse{
+			ObservedIPv4: testBootstrapHost,
+			Port:         58103,
+			Reachable:    true,
+		})
+	}()
+
+	result, err := Connect(testBootstrapHost, 58103, testBootstrapNodeID)
+	if err != nil {
+		t.Fatalf(testConnectErrorFormat, err)
+	}
+
+	removePendingSession(result.SessionID)
+}
+
 func TestConnectReturnsDeadlineError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	wantErr := errors.New("deadline failed")
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{deadlineErr: wantErr}, nil
 	}
 
@@ -826,7 +906,7 @@ func TestConnectReturnsEncodeError(t *testing.T) {
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	wantErr := errors.New(testWriteFailedText)
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{writeErr: wantErr}, nil
 	}
 
@@ -840,7 +920,7 @@ func TestConnectReturnsDecodeError(t *testing.T) {
 	defer restore()
 
 	resolveNodeID = func() string { return testJoiningNodeID }
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: []byte(testInvalidJSON)}, nil
 	}
 
@@ -858,7 +938,7 @@ func TestConnectReturnsBootstrapResponseError(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testMarshalErrorFormat, err)
 	}
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
 	}
 
@@ -876,7 +956,7 @@ func TestConnectRejectsUnusableEndpointResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testMarshalErrorFormat, err)
 	}
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
 	}
 
@@ -894,7 +974,7 @@ func TestConnectReturnsSessionIDError(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testMarshalErrorFormat, err)
 	}
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
 	}
 	randomSource = errReader{err: errors.New("random failed")}
@@ -916,7 +996,7 @@ func TestConnectRemovesPendingSessionWhenTimerFires(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return clientConn, nil
 	}
 
@@ -963,7 +1043,13 @@ func TestStartServiceInvokesBootstrapLoop(t *testing.T) {
 	}
 
 	called := make(chan struct{}, 1)
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+		}
 		called <- struct{}{}
 		return &failingListener{acceptErr: errors.New("stop")}, nil
 	}
@@ -987,7 +1073,13 @@ func TestStartBootstrapServiceReturnsAcceptError(t *testing.T) {
 		return bootstrapList, nil
 	}
 	wantErr := errors.New("listener stopped")
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+		}
 		return &failingListener{acceptErr: wantErr}, nil
 	}
 
@@ -1018,7 +1110,7 @@ func TestStartBootstrapServiceNoOpWithoutLocalNodeID(t *testing.T) {
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
 		return loadBootstrapListFixture(t), nil
 	}
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(int, string) (net.Listener, error) {
 		t.Fatal("listenBootstrap() called without local node id")
 		return nil, nil
 	}
@@ -1036,13 +1128,33 @@ func TestStartBootstrapServiceNoOpWhenLocalNodeIsNotBootstrap(t *testing.T) {
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
 		return loadBootstrapListFixture(t), nil
 	}
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(int, string) (net.Listener, error) {
 		t.Fatal("listenBootstrap() called for non-bootstrap node")
 		return nil, nil
 	}
 
 	if err := startBootstrapService(context.Background()); err != nil {
 		t.Fatalf("startBootstrapService() error = %v", err)
+	}
+}
+
+func TestStartBootstrapServiceReturnsMissingBootstrapAccountIDError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testBootstrapNodeID }
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return []byte(`version: 1
+nodes:
+  na-east:
+    node_id: "` + testBootstrapNodeID + `"
+    host: "` + testBootstrapHost + `"
+    port: 58103
+`), nil
+	}
+
+	if err := startBootstrapService(context.Background()); err == nil || err.Error() != "bootstrap account id is not configured" {
+		t.Fatalf("startBootstrapService() error = %v, want bootstrap account id is not configured", err)
 	}
 }
 
@@ -1055,7 +1167,13 @@ func TestStartBootstrapServiceReturnsListenError(t *testing.T) {
 		return loadBootstrapListFixture(t), nil
 	}
 	wantErr := errors.New("listen failed")
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+		}
 		return nil, wantErr
 	}
 
@@ -4594,7 +4712,13 @@ func TestStartBootstrapServiceLaunchesConnectionHandler(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+		}
 		return &scriptedListener{
 			conns: []net.Conn{connWithRemoteAddr{
 				Conn:       serverConn,
@@ -4993,6 +5117,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalProbeEndpoint := probeEndpoint
 	originalDialBootstrap := dialBootstrap
 	originalListenBootstrap := listenBootstrap
+	originalLoadLocalAccountKey := loadLocalAccountKey
 	originalLoadNodeRecords := loadNodeRecords
 	originalLoadUsernameIndex := loadUsernameIndex
 	originalSaveUsernameIndex := saveUsernameIndex
@@ -5017,6 +5142,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	probeEndpoint = measureEndpointLatency
 	dialBootstrap = dialBootstrapEndpoint
 	listenBootstrap = listenBootstrapEndpoint
+	loadLocalAccountKey = accounts.LoadLocalKey
 	loadNodeRecords = loadExistingNodeRecords
 	loadUsernameIndex = loadUsernameIndexCache
 	saveUsernameIndex = saveUsernameIndexCache
@@ -5043,6 +5169,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 		probeEndpoint = originalProbeEndpoint
 		dialBootstrap = originalDialBootstrap
 		listenBootstrap = originalListenBootstrap
+		loadLocalAccountKey = originalLoadLocalAccountKey
 		loadNodeRecords = originalLoadNodeRecords
 		loadUsernameIndex = originalLoadUsernameIndex
 		saveUsernameIndex = originalSaveUsernameIndex
