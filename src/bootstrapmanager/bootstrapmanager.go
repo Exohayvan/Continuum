@@ -210,12 +210,16 @@ func (file *metaFile) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func defaultMarshalIndexJSON(index usernameIndex) ([]byte, error) {
+	return json.MarshalIndent(index, "", "  ")
+}
+
 var (
 	ensureDataLayout  = datamanager.EnsureLayout
 	readDirectory     = os.ReadDir
 	readManagedFile   = datamanager.ReadFile
 	writeManagedFile  = datamanager.WriteFile
-	marshalIndexJSON  = func(index usernameIndex) ([]byte, error) { return json.MarshalIndent(index, "", "  ") }
+	marshalIndexJSON  func(usernameIndex) ([]byte, error)
 	resolveNodeID     = nodeid.GetNodeID
 	createAccount     = accounts.Generate
 	recoverAccount    = accounts.Recover
@@ -238,6 +242,10 @@ var (
 	pendingSessionsMu sync.Mutex
 	pendingSessions   = map[string]*pendingSession{}
 )
+
+func init() {
+	marshalIndexJSON = defaultMarshalIndexJSON
+}
 
 var errInvalidBootstrapEndpoint = errors.New("invalid bootstrap endpoint")
 
@@ -1373,14 +1381,13 @@ func verifyMetaFile(data []byte, nodeID, accountID string, publicKey ed25519.Pub
 	if file.Revision <= 0 {
 		return errors.New("node meta revision must be positive")
 	}
-	unsigned := unsignedMetaFile{
+	if err := verifySignedPayload(unsignedMetaFile{
 		NodeID:    file.NodeID,
 		AccountID: file.AccountID,
 		FirstSeen: file.FirstSeen,
 		Revision:  file.Revision,
 		UpdatedAt: file.UpdatedAt,
-	}
-	if err := verifySignedPayload(unsigned, file.Signature, publicKey); err == nil {
+	}, file.Signature, publicKey); err == nil {
 		return nil
 	} else {
 		if legacyErr := verifySignedPayload(legacyUnsignedMetaFile{

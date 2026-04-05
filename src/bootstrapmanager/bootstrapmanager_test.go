@@ -54,6 +54,7 @@ const (
 	testCompleteWantErrorFormat              = "Complete() error = %v, want %s"
 	testRegisterWantErrorFormat              = "Register() error = %v, want %v"
 	testLoginWantErrorFormat                 = "Login() error = %v, want %v"
+	testSaveLocalProfileArgsFormat           = "saveLocalProfile() args = (%q, %q), want (%q, %q)"
 	testGenerateKeyErrorFormat               = "GenerateKey() error = %v"
 	testDefaultListenPortFormat              = "defaultListenPort() = %d, want %d"
 	testLoadExistingNodeRecordsErrorFormat   = "loadExistingNodeRecords() error = %v"
@@ -69,6 +70,8 @@ const (
 	testRecoverySessionID                    = "session-recover"
 	testBootstrapNodeID                      = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
 	testOtherAccountID                       = "other-account"
+	testFirstIndexedAccountID                = "account-1"
+	testSecondIndexedAccountID               = "account-2"
 	testAliceHashKey                         = "hash-alice"
 	testInvalidJSON                          = "not-json"
 	testInvalidBase64                        = "not-base64"
@@ -1602,7 +1605,7 @@ func TestRegisterSavesUsernameIndexAfterFinalize(t *testing.T) {
 	}
 	saveLocalProfile = func(accountID, username string) (string, error) {
 		if accountID != material.AccountID || username != "alice" {
-			t.Fatalf("saveLocalProfile() args = (%q, %q), want (%q, %q)", accountID, username, material.AccountID, "alice")
+			t.Fatalf(testSaveLocalProfileArgsFormat, accountID, username, material.AccountID, "alice")
 		}
 		return filepath.Join("local", "account", material.AccountID+".profile"), nil
 	}
@@ -1667,7 +1670,7 @@ func TestLoginUsesUsernameIndexAndBlob(t *testing.T) {
 	}
 	saveLocalProfile = func(accountID, username string) (string, error) {
 		if accountID != material.AccountID || username != "alice" {
-			t.Fatalf("saveLocalProfile() args = (%q, %q), want (%q, %q)", accountID, username, material.AccountID, "alice")
+			t.Fatalf(testSaveLocalProfileArgsFormat, accountID, username, material.AccountID, "alice")
 		}
 		return filepath.Join("local", "account", material.AccountID+".profile"), nil
 	}
@@ -1870,7 +1873,7 @@ func TestRegisterReturnsSaveLocalProfileError(t *testing.T) {
 	wantErr := errors.New("save profile failed")
 	saveLocalProfile = func(accountID, username string) (string, error) {
 		if accountID != material.AccountID || username != "alice" {
-			t.Fatalf("saveLocalProfile() args = (%q, %q), want (%q, %q)", accountID, username, material.AccountID, "alice")
+			t.Fatalf(testSaveLocalProfileArgsFormat, accountID, username, material.AccountID, "alice")
 		}
 		return "", wantErr
 	}
@@ -1991,7 +1994,7 @@ func TestLoginReturnsAmbiguousUsernameError(t *testing.T) {
 		removePendingSession(testSessionID)
 	})
 	loadUsernameIndex = func() (usernameIndex, error) {
-		return usernameIndex{accounts.UsernameHash("alice"): {"account-1", "account-2"}}, nil
+		return usernameIndex{accounts.UsernameHash("alice"): {testFirstIndexedAccountID, testSecondIndexedAccountID}}, nil
 	}
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
@@ -2095,13 +2098,15 @@ func TestLoadUsernameIndexCacheHandlesReadPaths(t *testing.T) {
 		t.Fatalf("loadUsernameIndexCache() len = %d, want 0", len(index))
 	}
 
-	readManagedFile = func(string) ([]byte, error) { return []byte(`{"` + testAliceHashKey + `":["account-1"]}`), nil }
+	readManagedFile = func(string) ([]byte, error) {
+		return []byte(`{"` + testAliceHashKey + `":["` + testFirstIndexedAccountID + `"]}`), nil
+	}
 	index, err = loadUsernameIndexCache()
 	if err != nil {
 		t.Fatalf("loadUsernameIndexCache() success-path error = %v", err)
 	}
-	if got := index.accountIDsForHash(testAliceHashKey); len(got) != 1 || got[0] != "account-1" {
-		t.Fatalf("loadUsernameIndexCache() index[%s] = %#v, want [account-1]", testAliceHashKey, got)
+	if got := index.accountIDsForHash(testAliceHashKey); len(got) != 1 || got[0] != testFirstIndexedAccountID {
+		t.Fatalf("loadUsernameIndexCache() index[%s] = %#v, want [%s]", testAliceHashKey, got, testFirstIndexedAccountID)
 	}
 
 	readManagedFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
@@ -2117,7 +2122,7 @@ func TestLoadUsernameIndexCacheHandlesReadPaths(t *testing.T) {
 
 func TestUsernameIndexAccountIDsForHashHandlesBlankAndDuplicates(t *testing.T) {
 	index := usernameIndex{
-		testAliceHashKey: {" ", "account-1", "account-1", "account-2", "account-2"},
+		testAliceHashKey: {" ", testFirstIndexedAccountID, testFirstIndexedAccountID, testSecondIndexedAccountID, testSecondIndexedAccountID},
 	}
 
 	if got := index.accountIDsForHash(" "); got != nil {
@@ -2125,7 +2130,7 @@ func TestUsernameIndexAccountIDsForHashHandlesBlankAndDuplicates(t *testing.T) {
 	}
 
 	got := index.accountIDsForHash(testAliceHashKey)
-	want := []string{"account-1", "account-2"}
+	want := []string{testFirstIndexedAccountID, testSecondIndexedAccountID}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("accountIDsForHash(%q) = %#v, want %#v", testAliceHashKey, got, want)
 	}
@@ -3781,7 +3786,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	readDirectory = os.ReadDir
 	readManagedFile = datamanager.ReadFile
 	writeManagedFile = datamanager.WriteFile
-	marshalIndexJSON = func(index usernameIndex) ([]byte, error) { return json.MarshalIndent(index, "", "  ") }
+	marshalIndexJSON = defaultMarshalIndexJSON
 	resolveNodeID = nodeid.GetNodeID
 	createAccount = accounts.Generate
 	recoverAccount = accounts.Recover
