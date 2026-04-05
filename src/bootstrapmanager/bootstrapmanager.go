@@ -1381,27 +1381,28 @@ func verifyMetaFile(data []byte, nodeID, accountID string, publicKey ed25519.Pub
 	if file.Revision <= 0 {
 		return errors.New("node meta revision must be positive")
 	}
-	if err := verifySignedPayload(unsignedMetaFile{
+	err := verifySignedPayload(unsignedMetaFile{
 		NodeID:    file.NodeID,
 		AccountID: file.AccountID,
 		FirstSeen: file.FirstSeen,
 		Revision:  file.Revision,
 		UpdatedAt: file.UpdatedAt,
-	}, file.Signature, publicKey); err == nil {
+	}, file.Signature, publicKey)
+	if err == nil {
 		return nil
-	} else {
-		if legacyErr := verifySignedPayload(legacyUnsignedMetaFile{
-			NodeID:    file.NodeID,
-			AccountID: file.AccountID,
-			FirstSeen: file.FirstSeen,
-			Revision:  file.Revision,
-			UpdatedAt: file.UpdatedAt,
-		}, file.Signature, publicKey); legacyErr == nil {
-			return nil
-		}
-
-		return err
 	}
+
+	if verifySignedPayload(legacyUnsignedMetaFile{
+		NodeID:    file.NodeID,
+		AccountID: file.AccountID,
+		FirstSeen: file.FirstSeen,
+		Revision:  file.Revision,
+		UpdatedAt: file.UpdatedAt,
+	}, file.Signature, publicKey) == nil {
+		return nil
+	}
+
+	return err
 }
 
 func verifySignedPayload(payload any, signature string, publicKey ed25519.PublicKey) error {
