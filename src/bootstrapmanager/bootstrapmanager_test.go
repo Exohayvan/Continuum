@@ -283,6 +283,64 @@ func TestBuildBootstrapStartResponseUsesObservedIPv4AndRecovery(t *testing.T) {
 	}
 }
 
+func TestBuildBootstrapStartResponsePropagatesUsernameHash(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	accountID, privateKey, blobData, accountPubKeyData, _, err := buildAccountFixtures(testBootstrapTimestamp)
+	if err != nil {
+		t.Fatalf(testBuildAccountFixturesErrorFormat, err)
+	}
+	accountPubKey := privateKey.Public().(ed25519.PublicKey)
+	accountMetaData, err := accounts.BuildMetaWithUsernameHash(accountID, accountPubKey, testBootstrapTimestamp, 1, testAliceHashKey, privateKey)
+	if err != nil {
+		t.Fatalf("BuildMetaWithUsernameHash() error = %v", err)
+	}
+
+	probeEndpoint = func(string, int) (time.Duration, error) {
+		return 5 * time.Millisecond, nil
+	}
+	readManagedFile = func(path string) ([]byte, error) {
+		switch path {
+		case testPeerPath():
+			return []byte(`{}`), nil
+		case testMetaPath():
+			return buildSignedMetaFixture(t, privateKey, testJoiningNodeID, accountID, testBootstrapTimestamp, 7), nil
+		case filepath.Join("network", "accounts", accountID+pubkeyFileSuffix):
+			return accountPubKeyData, nil
+		case filepath.Join("network", "accounts", accountID+metaFileSuffix):
+			return accountMetaData, nil
+		case filepath.Join("network", "accounts", accountID+accountBlobFileSuffix):
+			return blobData, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	response := buildBootstrapStartResponse(&net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001}, bootstrapSessionStartRequest{
+		Type:       "start",
+		NodeID:     testJoiningNodeID,
+		ListenPort: 58103,
+	})
+	if response.UsernameHash != testAliceHashKey {
+		t.Fatalf("buildBootstrapStartResponse().UsernameHash = %q, want %q", response.UsernameHash, testAliceHashKey)
+	}
+}
+
+func TestMetaFileUnmarshalJSONReturnsCurrentFieldError(t *testing.T) {
+	var file metaFile
+	if err := file.UnmarshalJSON([]byte(`{"first_seen":1}`)); err == nil {
+		t.Fatal("metaFile.UnmarshalJSON() error = nil, want current field decode failure")
+	}
+}
+
+func TestMetaFileUnmarshalJSONReturnsLegacyFieldError(t *testing.T) {
+	var file metaFile
+	if err := file.UnmarshalJSON([]byte(`{"First Seen":1}`)); err == nil {
+		t.Fatal("metaFile.UnmarshalJSON() error = nil, want legacy field decode failure")
+	}
+}
+
 func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -1686,6 +1744,15 @@ func TestRegisterReturnsUsernameRequiredError(t *testing.T) {
 	}
 }
 
+func TestRegisterReturnsInputValidationError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	if _, err := Register("", "alice", testAccountPassword); err == nil {
+		t.Fatal("Register() error = nil, want input validation failure")
+	}
+}
+
 func TestRegisterReturnsMissingSessionError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -1759,6 +1826,73 @@ func TestRegisterReturnsUsernameIndexSaveError(t *testing.T) {
 	}
 }
 
+func TestRegisterReturnsFinalizeError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	createAccount = func(string) (accounts.Material, error) { return material, nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
+	wantErr := errors.New(testWriteFailedText)
+	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
+	saveUsernameIndex = func(usernameIndex) error {
+		t.Fatal("saveUsernameIndex() called during finalize failure")
+		return nil
+	}
+	saveLocalProfile = func(string, string) (string, error) {
+		t.Fatal("saveLocalProfile() called during finalize failure")
+		return "", nil
+	}
+	storePendingSession(&pendingSession{
+		id:       testSessionID,
+		conn:     &stubConn{},
+		nodeID:   testJoiningNodeID,
+		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
+	}
+}
+
+func TestRegisterReturnsSaveLocalProfileError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	createAccount = func(string) (accounts.Material, error) { return material, nil }
+	loadUsernameIndex = func() (usernameIndex, error) { return usernameIndex{}, nil }
+	writeManagedFile = func(string, []byte, os.FileMode) error { return nil }
+	saveUsernameIndex = func(usernameIndex) error { return nil }
+	wantErr := errors.New("save profile failed")
+	saveLocalProfile = func(accountID, username string) (string, error) {
+		if accountID != material.AccountID || username != "alice" {
+			t.Fatalf("saveLocalProfile() args = (%q, %q), want (%q, %q)", accountID, username, material.AccountID, "alice")
+		}
+		return "", wantErr
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	storePendingSession(&pendingSession{
+		id:       testSessionID,
+		conn:     clientConn,
+		nodeID:   testJoiningNodeID,
+		response: bootstrapSessionStartResponse{ObservedIPv4: testBootstrapHost, Port: 58103},
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+	go respondToFinalizeRequest(t, serverConn)
+
+	if _, err := Register(testSessionID, "alice", testAccountPassword); !errors.Is(err, wantErr) {
+		t.Fatalf(testRegisterWantErrorFormat, err, wantErr)
+	}
+}
+
 func TestRegisterAllowsExistingUsernameForSameAccountID(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -1796,6 +1930,24 @@ func TestLoginReturnsUsernameRequiredError(t *testing.T) {
 
 	if _, err := Login(testSessionID, " ", testAccountPassword); err == nil {
 		t.Fatal("Login() error = nil, want username required failure")
+	}
+}
+
+func TestLoginReturnsInputValidationError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	if _, err := Login("", "alice", testAccountPassword); err == nil {
+		t.Fatal("Login() error = nil, want input validation failure")
+	}
+}
+
+func TestLoginReturnsMissingSessionError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != testSessionMissingText {
+		t.Fatalf("Login() error = %v, want %q", err, testSessionMissingText)
 	}
 }
 
@@ -1963,6 +2115,34 @@ func TestLoadUsernameIndexCacheHandlesReadPaths(t *testing.T) {
 	}
 }
 
+func TestUsernameIndexAccountIDsForHashHandlesBlankAndDuplicates(t *testing.T) {
+	index := usernameIndex{
+		testAliceHashKey: {" ", "account-1", "account-1", "account-2", "account-2"},
+	}
+
+	if got := index.accountIDsForHash(" "); got != nil {
+		t.Fatalf("accountIDsForHash(blank) = %#v, want nil", got)
+	}
+
+	got := index.accountIDsForHash(testAliceHashKey)
+	want := []string{"account-1", "account-2"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("accountIDsForHash(%q) = %#v, want %#v", testAliceHashKey, got, want)
+	}
+}
+
+func TestUsernameIndexAddSkipsNilAndBlankEntries(t *testing.T) {
+	var nilIndex usernameIndex
+	nilIndex.add(testAliceHashKey, testAccountID)
+
+	index := usernameIndex{}
+	index.add(" ", testAccountID)
+	index.add(testAliceHashKey, " ")
+	if len(index) != 0 {
+		t.Fatalf("username index after blank add = %#v, want empty", index)
+	}
+}
+
 func TestSaveUsernameIndexCachePersistsJSON(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -1999,6 +2179,18 @@ func TestSaveUsernameIndexCacheReturnsWriteError(t *testing.T) {
 
 	wantErr := errors.New("write failed")
 	writeManagedFile = func(string, []byte, os.FileMode) error { return wantErr }
+
+	if err := saveUsernameIndexCache(usernameIndex{testAliceHashKey: {testAccountID}}); !errors.Is(err, wantErr) {
+		t.Fatalf("saveUsernameIndexCache() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSaveUsernameIndexCacheReturnsMarshalError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	wantErr := errors.New("marshal failed")
+	marshalIndexJSON = func(usernameIndex) ([]byte, error) { return nil, wantErr }
 
 	if err := saveUsernameIndexCache(usernameIndex{testAliceHashKey: {testAccountID}}); !errors.Is(err, wantErr) {
 		t.Fatalf("saveUsernameIndexCache() error = %v, want %v", err, wantErr)
@@ -3564,6 +3756,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalReadDirectory := readDirectory
 	originalReadManagedFile := readManagedFile
 	originalWriteManagedFile := writeManagedFile
+	originalMarshalIndexJSON := marshalIndexJSON
 	originalResolveNodeID := resolveNodeID
 	originalCreateAccount := createAccount
 	originalRecoverAccount := recoverAccount
@@ -3588,6 +3781,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	readDirectory = os.ReadDir
 	readManagedFile = datamanager.ReadFile
 	writeManagedFile = datamanager.WriteFile
+	marshalIndexJSON = func(index usernameIndex) ([]byte, error) { return json.MarshalIndent(index, "", "  ") }
 	resolveNodeID = nodeid.GetNodeID
 	createAccount = accounts.Generate
 	recoverAccount = accounts.Recover
@@ -3614,6 +3808,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 		readDirectory = originalReadDirectory
 		readManagedFile = originalReadManagedFile
 		writeManagedFile = originalWriteManagedFile
+		marshalIndexJSON = originalMarshalIndexJSON
 		resolveNodeID = originalResolveNodeID
 		createAccount = originalCreateAccount
 		recoverAccount = originalRecoverAccount

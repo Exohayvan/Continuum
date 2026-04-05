@@ -326,6 +326,12 @@ func TestBuildAndSaveLocalProfileReturnErrors(t *testing.T) {
 	if _, err := BuildLocalProfile(testAccountID, " "); err == nil {
 		t.Fatal("BuildLocalProfile() error = nil, want blank username failure")
 	}
+	if _, err := SaveLocalProfile(" ", testProfileUsername); err == nil {
+		t.Fatal("SaveLocalProfile() error = nil, want blank account id failure")
+	}
+	if _, err := SaveLocalProfile(testAccountID, " "); err == nil {
+		t.Fatal("SaveLocalProfile() error = nil, want blank username failure")
+	}
 
 	writtenPath := ""
 	writeProfileFile = func(path string, data []byte, perm os.FileMode) error {

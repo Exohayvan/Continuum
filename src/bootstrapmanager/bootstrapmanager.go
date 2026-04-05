@@ -215,6 +215,7 @@ var (
 	readDirectory     = os.ReadDir
 	readManagedFile   = datamanager.ReadFile
 	writeManagedFile  = datamanager.WriteFile
+	marshalIndexJSON  = func(index usernameIndex) ([]byte, error) { return json.MarshalIndent(index, "", "  ") }
 	resolveNodeID     = nodeid.GetNodeID
 	createAccount     = accounts.Generate
 	recoverAccount    = accounts.Recover
@@ -764,7 +765,7 @@ func saveUsernameIndexCache(index usernameIndex) error {
 		index = usernameIndex{}
 	}
 
-	data, err := json.MarshalIndent(index, "", "  ")
+	data, err := marshalIndexJSON(index)
 	if err != nil {
 		return err
 	}
