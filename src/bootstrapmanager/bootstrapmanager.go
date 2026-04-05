@@ -1383,14 +1383,13 @@ func verifyMetaFile(data []byte, nodeID, accountID string, publicKey ed25519.Pub
 	if err := verifySignedPayload(unsigned, file.Signature, publicKey); err == nil {
 		return nil
 	} else {
-		legacyUnsigned := legacyUnsignedMetaFile{
+		if legacyErr := verifySignedPayload(legacyUnsignedMetaFile{
 			NodeID:    file.NodeID,
 			AccountID: file.AccountID,
 			FirstSeen: file.FirstSeen,
 			Revision:  file.Revision,
 			UpdatedAt: file.UpdatedAt,
-		}
-		if legacyErr := verifySignedPayload(legacyUnsigned, file.Signature, publicKey); legacyErr == nil {
+		}, file.Signature, publicKey); legacyErr == nil {
 			return nil
 		}
 
