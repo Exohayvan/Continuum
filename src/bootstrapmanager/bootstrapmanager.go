@@ -28,6 +28,7 @@ import (
 
 const (
 	BootstrapListURL         = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/bootstrap-list.yaml"
+	PublicIPv4LookupURL      = "https://api.ipify.org"
 	peerFileSuffix           = ".peer"
 	metaFileSuffix           = ".meta"
 	pubkeyFileSuffix         = ".pubkey"
@@ -194,11 +195,12 @@ type bootstrapSessionFinalizeResponse struct {
 }
 
 type pendingSession struct {
-	id       string
-	conn     net.Conn
-	nodeID   string
-	response bootstrapSessionStartResponse
-	timer    *time.Timer
+	id            string
+	conn          net.Conn
+	nodeID        string
+	bootstrapHost string
+	response      bootstrapSessionStartResponse
+	timer         *time.Timer
 }
 
 type existingNodeRecords struct {
@@ -260,6 +262,7 @@ var (
 	loadUsernameIndex   = loadUsernameIndexCache
 	saveUsernameIndex   = saveUsernameIndexCache
 	loadLocalAccountKey = accounts.LoadLocalKey
+	discoverPublicIPv4  = discoverPublicIPv4FromService
 	currentTime         = time.Now
 	scheduleAfter       = time.AfterFunc
 	signPeerOrMeta      = signPayload
@@ -546,10 +549,11 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 	}
 
 	session := &pendingSession{
-		id:       sessionID,
-		conn:     conn,
-		nodeID:   localNodeID,
-		response: response,
+		id:            sessionID,
+		conn:          conn,
+		nodeID:        localNodeID,
+		bootstrapHost: strings.TrimSpace(host),
+		response:      response,
 	}
 	session.timer = scheduleAfter(bootstrapSessionTTL, func() {
 		removePendingSession(sessionID)
@@ -987,7 +991,12 @@ func buildCompletionArtifacts(session *pendingSession, material accounts.Materia
 		usernameHash = strings.TrimSpace(session.response.UsernameHash)
 	}
 
-	peerData, err := buildPeerFile(session.response.ObservedIPv4, session.response.Port, material.AccountID, material.PrivateKey)
+	peerIPv4, err := peerIPv4ForCompletion(session)
+	if err != nil {
+		return completionArtifacts{}, err
+	}
+
+	peerData, err := buildPeerFile(peerIPv4, session.response.Port, material.AccountID, material.PrivateKey)
 	if err != nil {
 		return completionArtifacts{}, err
 	}
@@ -1007,6 +1016,36 @@ func buildCompletionArtifacts(session *pendingSession, material accounts.Materia
 		accountPubKeyData: accountPubKeyData,
 		accountMetaData:   accountMetaData,
 	}, nil
+}
+
+func peerIPv4ForCompletion(session *pendingSession) (string, error) {
+	observedIPv4 := strings.TrimSpace(session.response.ObservedIPv4)
+	if isRoutableIPv4(observedIPv4) {
+		return observedIPv4, nil
+	}
+
+	bootstrapHost := strings.TrimSpace(session.bootstrapHost)
+	if isLoopbackIPv4(observedIPv4) && isRoutableIPv4(bootstrapHost) {
+		return bootstrapHost, nil
+	}
+
+	if !isRoutableIPv4(bootstrapHost) {
+		if isValidIPv4(observedIPv4) {
+			return observedIPv4, nil
+		}
+
+		return "", errors.New("bootstrap response did not include a usable peer IPv4")
+	}
+
+	publicIPv4, err := discoverPublicIPv4(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("unable to resolve public IPv4 for peer file: %w", err)
+	}
+	if !isRoutableIPv4(publicIPv4) {
+		return "", errors.New("public IPv4 discovery did not return a routable IPv4 address")
+	}
+
+	return publicIPv4, nil
 }
 
 func normalizeCompletionState(response bootstrapSessionStartResponse) completionState {
@@ -1736,6 +1775,70 @@ func loadExistingAccountBlob(accountID string, accountPubKey ed25519.PublicKey) 
 	}
 
 	return blobData, true, nil
+}
+
+func discoverPublicIPv4FromService(ctx context.Context) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, PublicIPv4LookupURL, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("User-Agent", "continuum-bootstrap")
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("public IPv4 lookup returned %s", response.Status)
+	}
+
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+
+	ipv4 := strings.TrimSpace(string(data))
+	if !isValidIPv4(ipv4) {
+		return "", errors.New("public IPv4 lookup returned an invalid IPv4 address")
+	}
+
+	return ipv4, nil
+}
+
+func isValidIPv4(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	return ip != nil && ip.To4() != nil
+}
+
+func isLoopbackIPv4(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if ip == nil {
+		return false
+	}
+
+	return ip.To4() != nil && ip.IsLoopback()
+}
+
+func isRoutableIPv4(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if ip == nil {
+		return false
+	}
+
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	if ipv4.IsLoopback() || ipv4.IsPrivate() || ipv4.IsLinkLocalMulticast() || ipv4.IsLinkLocalUnicast() || ipv4.IsMulticast() || ipv4.IsUnspecified() {
+		return false
+	}
+	if ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127 {
+		return false
+	}
+
+	return true
 }
 
 func extractObservedIPv4(remoteAddr net.Addr) (string, error) {

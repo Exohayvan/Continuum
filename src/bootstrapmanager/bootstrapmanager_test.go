@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,9 @@ import (
 const (
 	testBootstrapHost                        = "162.191.52.239"
 	testLoopbackHost                         = "127.0.0.1"
+	testPrivateBootstrapHost                 = "192.168.1.1"
+	testPrivateObservedIPv4                  = "192.168.1.20"
+	testDiscoveredPublicIPv4                 = "203.0.113.44"
 	testBootstrapName                        = "na-east"
 	testBootstrapTimestamp                   = "2026-04-02T00:00:00Z"
 	testUpdatedTimestamp                     = "2026-04-02T01:00:00Z"
@@ -4220,6 +4224,94 @@ func TestExtractObservedIPv4ReturnsErrors(t *testing.T) {
 	}
 }
 
+func TestDiscoverPublicIPv4FromServiceReturnsErrors(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	t.Run("request failure", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New(testLoadFailedText)
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want failure")
+		}
+	})
+
+	t.Run("bad status", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Status:     "502 Bad Gateway",
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want status failure")
+		}
+	})
+
+	t.Run("invalid body", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader(testInvalidJSON)),
+			}, nil
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want invalid IPv4 failure")
+		}
+	})
+}
+
+func TestDiscoverPublicIPv4FromServiceReturnsIPv4(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	httpClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != PublicIPv4LookupURL {
+			t.Fatalf("discoverPublicIPv4FromService() url = %q, want %q", request.URL.String(), PublicIPv4LookupURL)
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(testDiscoveredPublicIPv4 + "\n")),
+		}, nil
+	})}
+
+	got, err := discoverPublicIPv4FromService(context.Background())
+	if err != nil {
+		t.Fatalf("discoverPublicIPv4FromService() error = %v", err)
+	}
+	if got != testDiscoveredPublicIPv4 {
+		t.Fatalf("discoverPublicIPv4FromService() = %q, want %q", got, testDiscoveredPublicIPv4)
+	}
+}
+
+func TestIsRoutableIPv4(t *testing.T) {
+	cases := []struct {
+		address string
+		want    bool
+	}{
+		{address: testBootstrapHost, want: true},
+		{address: testLoopbackHost, want: false},
+		{address: testPrivateObservedIPv4, want: false},
+		{address: "100.64.0.1", want: false},
+		{address: "", want: false},
+		{address: "not-an-ip", want: false},
+	}
+
+	for _, tc := range cases {
+		if got := isRoutableIPv4(tc.address); got != tc.want {
+			t.Fatalf("isRoutableIPv4(%q) = %t, want %t", tc.address, got, tc.want)
+		}
+	}
+}
+
 func TestSignPayloadReturnsMarshalError(t *testing.T) {
 	if _, err := signPayload(make(ed25519.PrivateKey, ed25519.PrivateKeySize), make(chan int)); err == nil {
 		t.Fatal("signPayload() error = nil, want marshal failure")
@@ -4686,6 +4778,111 @@ func TestBuildCompletionArtifactsReturnsPeerSignError(t *testing.T) {
 	}, material, "")
 	if err == nil || err.Error() != testSignFailedText {
 		t.Fatalf("buildCompletionArtifacts() error = %v, want %s", err, testSignFailedText)
+	}
+}
+
+func TestBuildCompletionArtifactsUsesBootstrapHostForLoopbackObservedIPv4(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	artifacts, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testLoopbackHost,
+			Port:         58103,
+		},
+	}, material, "")
+	if err != nil {
+		t.Fatalf("buildCompletionArtifacts() error = %v", err)
+	}
+
+	var file peerFile
+	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
+		t.Fatalf("Unmarshal(peerData) error = %v", err)
+	}
+	if file.IPv4 != testBootstrapHost {
+		t.Fatalf("peerData IPv4 = %q, want %q", file.IPv4, testBootstrapHost)
+	}
+}
+
+func TestBuildCompletionArtifactsUsesDiscoveredPublicIPv4ForPublicBootstrap(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	discoverPublicIPv4 = func(context.Context) (string, error) {
+		return testDiscoveredPublicIPv4, nil
+	}
+
+	artifacts, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err != nil {
+		t.Fatalf("buildCompletionArtifacts() error = %v", err)
+	}
+
+	var file peerFile
+	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
+		t.Fatalf("Unmarshal(peerData) error = %v", err)
+	}
+	if file.IPv4 != testDiscoveredPublicIPv4 {
+		t.Fatalf("peerData IPv4 = %q, want %q", file.IPv4, testDiscoveredPublicIPv4)
+	}
+}
+
+func TestBuildCompletionArtifactsKeepsPrivateObservedIPv4ForPrivateBootstrap(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	artifacts, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testPrivateBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err != nil {
+		t.Fatalf("buildCompletionArtifacts() error = %v", err)
+	}
+
+	var file peerFile
+	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
+		t.Fatalf("Unmarshal(peerData) error = %v", err)
+	}
+	if file.IPv4 != testPrivateObservedIPv4 {
+		t.Fatalf("peerData IPv4 = %q, want %q", file.IPv4, testPrivateObservedIPv4)
+	}
+}
+
+func TestBuildCompletionArtifactsReturnsPublicIPv4DiscoveryError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	wantErr := errors.New(testLoadFailedText)
+	discoverPublicIPv4 = func(context.Context) (string, error) {
+		return "", wantErr
+	}
+
+	_, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("buildCompletionArtifacts() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -5156,6 +5353,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalLoadNodeRecords := loadNodeRecords
 	originalLoadUsernameIndex := loadUsernameIndex
 	originalSaveUsernameIndex := saveUsernameIndex
+	originalDiscoverPublicIPv4 := discoverPublicIPv4
 	originalCurrentTime := currentTime
 	originalScheduleAfter := scheduleAfter
 	originalSignPeerOrMeta := signPeerOrMeta
@@ -5181,6 +5379,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 	loadNodeRecords = loadExistingNodeRecords
 	loadUsernameIndex = loadUsernameIndexCache
 	saveUsernameIndex = saveUsernameIndexCache
+	discoverPublicIPv4 = discoverPublicIPv4FromService
 	currentTime = time.Now
 	scheduleAfter = time.AfterFunc
 	signPeerOrMeta = signPayload
@@ -5208,6 +5407,7 @@ func stubBootstrapHooks(t *testing.T) func() {
 		loadNodeRecords = originalLoadNodeRecords
 		loadUsernameIndex = originalLoadUsernameIndex
 		saveUsernameIndex = originalSaveUsernameIndex
+		discoverPublicIPv4 = originalDiscoverPublicIPv4
 		currentTime = originalCurrentTime
 		scheduleAfter = originalScheduleAfter
 		signPeerOrMeta = originalSignPeerOrMeta
