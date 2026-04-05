@@ -664,8 +664,12 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, errors.New("username account mapping does not match recovered account")
 	}
 
-	if err := validateAccountBundleFiles(accountID, material.PublicKey, filesByPath); err != nil {
+	accountMeta, err := validateAccountBundleFiles(accountID, material.PublicKey, filesByPath)
+	if err != nil {
 		return ConnectResult{}, err
+	}
+	if strings.TrimSpace(accountMeta.UsernameHash) != usernameHash {
+		return ConnectResult{}, errors.New("account lookup bundle username hash does not match requested username")
 	}
 
 	session.response.AccountID = accountID
@@ -1534,41 +1538,42 @@ func requireBundleFile(filesByPath map[string][]byte, path, missingFormat string
 	return data, nil
 }
 
-func validateAccountBundleFiles(accountID string, publicKey ed25519.PublicKey, filesByPath map[string][]byte) error {
+func validateAccountBundleFiles(accountID string, publicKey ed25519.PublicKey, filesByPath map[string][]byte) (accounts.Meta, error) {
 	accountPubKeyPath := accountPubKeyRelativePath(accountID)
 	accountMetaPath := accountMetaRelativePath(accountID)
 	accountBlobPath := accountBlobRelativePath(accountID)
 
 	accountPubKeyData, err := requireBundleFile(filesByPath, accountPubKeyPath, accountBundleMissingFmt)
 	if err != nil {
-		return err
+		return accounts.Meta{}, err
 	}
 	accountMetaData, err := requireBundleFile(filesByPath, accountMetaPath, accountBundleMissingFmt)
 	if err != nil {
-		return err
+		return accounts.Meta{}, err
 	}
 	accountBlobData, err := requireBundleFile(filesByPath, accountBlobPath, accountBundleMissingFmt)
 	if err != nil {
-		return err
+		return accounts.Meta{}, err
 	}
 
 	bundlePubKey, err := accounts.VerifyPublicKeyFile(accountID, accountPubKeyData)
 	if err != nil {
-		return err
+		return accounts.Meta{}, err
 	}
 	if !bundlePubKey.Equal(publicKey) {
-		return errors.New("account bundle public key does not match recovered account")
+		return accounts.Meta{}, errors.New("account bundle public key does not match recovered account")
 	}
-	if _, err := accounts.VerifyMeta(accountID, bundlePubKey, accountMetaData); err != nil {
-		return err
+	accountMeta, err := accounts.VerifyMeta(accountID, bundlePubKey, accountMetaData)
+	if err != nil {
+		return accounts.Meta{}, err
 	}
 	if _, blobPublicKey, err := accounts.ValidateBlob(accountBlobData); err != nil {
-		return err
+		return accounts.Meta{}, err
 	} else if !ed25519.PublicKey(blobPublicKey).Equal(bundlePubKey) {
-		return errors.New("account bundle account blob public key does not match trusted account pubkey")
+		return accounts.Meta{}, errors.New("account bundle account blob public key does not match trusted account pubkey")
 	}
 
-	return nil
+	return accountMeta, nil
 }
 
 func validateRecoveryBundleFiles(nodeID, accountID string, publicKey ed25519.PublicKey, filesByPath map[string][]byte) ([]byte, []byte, []byte, []byte, error) {

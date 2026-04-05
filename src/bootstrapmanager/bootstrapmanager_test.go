@@ -2538,7 +2538,7 @@ func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := validateAccountBundleFiles(fixture.accountID, tc.key, tc.files); err == nil {
+			if _, err := validateAccountBundleFiles(fixture.accountID, tc.key, tc.files); err == nil {
 				t.Fatal("validateAccountBundleFiles() error = nil, want failure")
 			}
 		})
@@ -2547,7 +2547,7 @@ func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
 	t.Run("invalid pubkey", func(t *testing.T) {
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountPubKeyRelativePath(fixture.accountID)] = []byte(testInvalidBase64)
-		if err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
+		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
 			t.Fatal("validateAccountBundleFiles() error = nil, want pubkey failure")
 		}
 	})
@@ -2555,7 +2555,7 @@ func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
 	t.Run("invalid meta", func(t *testing.T) {
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountMetaRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
-		if err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
+		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
 			t.Fatal("validateAccountBundleFiles() error = nil, want meta failure")
 		}
 	})
@@ -2563,7 +2563,7 @@ func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
 	t.Run("invalid blob", func(t *testing.T) {
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountBlobRelativePath(fixture.accountID)] = []byte(testInvalidJSON)
-		if err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
+		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
 			t.Fatal("validateAccountBundleFiles() error = nil, want blob failure")
 		}
 	})
@@ -2572,14 +2572,18 @@ func TestValidateAccountBundleFilesHandlesErrorsAndSuccess(t *testing.T) {
 		other := buildLoginFixture(t)
 		files := cloneRecoveryFiles(filesByPath)
 		files[accountBlobRelativePath(fixture.accountID)] = other.blobData
-		if err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
+		if _, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, files); err == nil {
 			t.Fatal("validateAccountBundleFiles() error = nil, want blob pubkey mismatch")
 		}
 	})
 
 	t.Run("success", func(t *testing.T) {
-		if err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, filesByPath); err != nil {
+		accountMeta, err := validateAccountBundleFiles(fixture.accountID, fixture.publicKey, filesByPath)
+		if err != nil {
 			t.Fatalf("validateAccountBundleFiles() error = %v", err)
+		}
+		if accountMeta.UsernameHash != accounts.UsernameHash("alice") {
+			t.Fatalf("validateAccountBundleFiles().UsernameHash = %q, want %q", accountMeta.UsernameHash, accounts.UsernameHash("alice"))
 		}
 	})
 }
@@ -3068,6 +3072,33 @@ func TestLoginReturnsInvalidAccountBundleError(t *testing.T) {
 
 	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil {
 		t.Fatal("Login() error = nil, want account bundle validation failure")
+	}
+}
+
+func TestLoginReturnsUsernameHashMismatchError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	fixture := buildLoginFixture(t)
+	recoverAccount = func([]byte, string) (accounts.Material, error) { return fixture.material, nil }
+	mismatchedMetaData, err := accounts.BuildMetaWithUsernameHash(fixture.accountID, fixture.publicKey, testBootstrapTimestamp, 1, accounts.UsernameHash("bob"), fixture.privateKey)
+	if err != nil {
+		t.Fatalf(testBuildMetaWithUsernameHashErrFmt, err)
+	}
+	storePendingSession(&pendingSession{
+		id: testSessionID,
+		conn: &stubConn{readData: mustMarshalJSON(t, bootstrapSessionLookupResponse{
+			AccountID:     fixture.accountID,
+			AccountBundle: buildAccountBundle(fixture.accountID, fixture.accountPubKeyData, mismatchedMetaData, fixture.blobData),
+		})},
+		nodeID: testJoiningNodeID,
+	})
+	t.Cleanup(func() {
+		removePendingSession(testSessionID)
+	})
+
+	if _, err := Login(testSessionID, "alice", testAccountPassword); err == nil || err.Error() != "account lookup bundle username hash does not match requested username" {
+		t.Fatalf("Login() error = %v, want username hash mismatch failure", err)
 	}
 }
 
