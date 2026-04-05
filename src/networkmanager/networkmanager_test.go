@@ -2,6 +2,10 @@ package networkmanager
 
 import (
 	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -184,6 +188,318 @@ func TestWrapConnTracksTraffic(t *testing.T) {
 	}
 	if usage.TotalWriteBytes != uint64(len("pong")) {
 		t.Fatalf(totalWriteBytesFormat, usage.TotalWriteBytes, len("pong"))
+	}
+}
+
+func TestDialTCP4ReturnsTrackedConn(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	now := time.Unix(1_700_000_004, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		serverConn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer serverConn.Close()
+
+		buffer := make([]byte, 5)
+		if _, err := io.ReadFull(serverConn, buffer); err != nil {
+			done <- err
+			return
+		}
+		if _, err := serverConn.Write([]byte("pong")); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	conn, err := DialTCP4(context.Background(), "127.0.0.1", port)
+	if err != nil {
+		t.Fatalf("DialTCP4() error = %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("ping!")); err != nil {
+		t.Fatalf(writeErrorFormat, err)
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		t.Fatalf(readErrorFormat, err)
+	}
+	if !bytes.Equal(reply, []byte("pong")) {
+		t.Fatalf("reply = %q, want %q", reply, "pong")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("listener goroutine error = %v", err)
+	}
+
+	usage := Snapshot()
+	if usage.TotalReadBytes != uint64(len("pong")) {
+		t.Fatalf(totalReadBytesFormat, usage.TotalReadBytes, len("pong"))
+	}
+	if usage.TotalWriteBytes != uint64(len("ping!")) {
+		t.Fatalf(totalWriteBytesFormat, usage.TotalWriteBytes, len("ping!"))
+	}
+}
+
+func TestListenTCP4TracksAcceptedConn(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	now := time.Unix(1_700_000_005, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	listener, err := ListenTCP4(0)
+	if err != nil {
+		t.Fatalf("ListenTCP4() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		serverConn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer serverConn.Close()
+
+		buffer := make([]byte, 4)
+		if _, err := io.ReadFull(serverConn, buffer); err != nil {
+			done <- err
+			return
+		}
+		if _, err := serverConn.Write([]byte("pong!")); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	clientConn, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port)))
+	if err != nil {
+		t.Fatalf("net.Dial() error = %v", err)
+	}
+	defer clientConn.Close()
+
+	if _, err := clientConn.Write([]byte("ping")); err != nil {
+		t.Fatalf(writeErrorFormat, err)
+	}
+	reply := make([]byte, 5)
+	if _, err := io.ReadFull(clientConn, reply); err != nil {
+		t.Fatalf(readErrorFormat, err)
+	}
+	if !bytes.Equal(reply, []byte("pong!")) {
+		t.Fatalf("reply = %q, want %q", reply, "pong!")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("listener goroutine error = %v", err)
+	}
+
+	usage := Snapshot()
+	if usage.TotalReadBytes != uint64(len("ping")) {
+		t.Fatalf(totalReadBytesFormat, usage.TotalReadBytes, len("ping"))
+	}
+	if usage.TotalWriteBytes != uint64(len("pong!")) {
+		t.Fatalf(totalWriteBytesFormat, usage.TotalWriteBytes, len("pong!"))
+	}
+}
+
+func TestDialSecureTCP4ReturnsTrackedConn(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	now := time.Unix(1_700_000_006, 0)
+	currentTime = func() time.Time {
+		return now
+	}
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	expectedAccountID := accountIDFromPublicKey(publicKey)
+
+	listener, err := ListenSecureTCP4(0, privateKey)
+	if err != nil {
+		t.Fatalf("ListenSecureTCP4() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		serverConn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer serverConn.Close()
+
+		buffer := make([]byte, 4)
+		if _, err := io.ReadFull(serverConn, buffer); err != nil {
+			done <- err
+			return
+		}
+		if _, err := serverConn.Write([]byte("pong!")); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	conn, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, expectedAccountID)
+	if err != nil {
+		t.Fatalf("DialSecureTCP4() error = %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf(writeErrorFormat, err)
+	}
+	reply := make([]byte, 5)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		t.Fatalf(readErrorFormat, err)
+	}
+	if !bytes.Equal(reply, []byte("pong!")) {
+		t.Fatalf("reply = %q, want %q", reply, "pong!")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("listener goroutine error = %v", err)
+	}
+
+	usage := Snapshot()
+	if usage.TotalReadBytes < uint64(len("ping")+len("pong!")) {
+		t.Fatalf("Snapshot().TotalReadBytes = %d, want at least %d", usage.TotalReadBytes, len("ping")+len("pong!"))
+	}
+	if usage.TotalWriteBytes < uint64(len("ping")+len("pong!")) {
+		t.Fatalf("Snapshot().TotalWriteBytes = %d, want at least %d", usage.TotalWriteBytes, len("ping")+len("pong!"))
+	}
+}
+
+func TestDialSecureTCP4RejectsUnexpectedAccountID(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	otherPublicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() other error = %v", err)
+	}
+
+	listener, err := ListenSecureTCP4(0, privateKey)
+	if err != nil {
+		t.Fatalf("ListenSecureTCP4() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		serverConn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer serverConn.Close()
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	if _, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, accountIDFromPublicKey(otherPublicKey)); err == nil {
+		t.Fatal("DialSecureTCP4() error = nil, want account id verification failure")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("listener goroutine error = %v", err)
+	}
+}
+
+func TestListenSecureTCP4IgnoresPlainTCPProbe(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	listener, err := ListenSecureTCP4(0, privateKey)
+	if err != nil {
+		t.Fatalf("ListenSecureTCP4() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		serverConn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer serverConn.Close()
+
+		buffer := make([]byte, 4)
+		if _, err := io.ReadFull(serverConn, buffer); err != nil {
+			done <- err
+			return
+		}
+		if _, err := serverConn.Write([]byte("pong")); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	probeConn, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port)))
+	if err != nil {
+		t.Fatalf("net.Dial() probe error = %v", err)
+	}
+	if err := probeConn.Close(); err != nil {
+		t.Fatalf("probeConn.Close() error = %v", err)
+	}
+
+	conn, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, accountIDFromPublicKey(publicKey))
+	if err != nil {
+		t.Fatalf("DialSecureTCP4() error = %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf(writeErrorFormat, err)
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		t.Fatalf(readErrorFormat, err)
+	}
+	if !bytes.Equal(reply, []byte("pong")) {
+		t.Fatalf("reply = %q, want %q", reply, "pong")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("listener goroutine error = %v", err)
+	}
+}
+
+func TestListenSecureTCP4ReturnsInvalidKeyError(t *testing.T) {
+	resetNetworkManagerTestState(t)
+
+	if _, err := ListenSecureTCP4(0, ed25519.PrivateKey("short")); err == nil {
+		t.Fatal("ListenSecureTCP4() error = nil, want invalid private key failure")
 	}
 }
 

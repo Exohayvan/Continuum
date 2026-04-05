@@ -146,6 +146,22 @@ function formatBandwidthUsage(snapshot) {
     return `Up ${Number(snapshot.writeMbps || 0).toFixed(2)} Mb/s • Down ${Number(snapshot.readMbps || 0).toFixed(2)} Mb/s`;
 }
 
+function formatFirstSeen(value) {
+    if (typeof value !== "string" || value.trim() === "") {
+        return "";
+    }
+
+    const timestamp = new Date(value);
+    if (Number.isNaN(timestamp.getTime())) {
+        return value;
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+    }).format(timestamp);
+}
+
 function formatBootstrapLatency(node) {
     if (!node || typeof node !== "object") {
         return "Unknown";
@@ -586,6 +602,7 @@ async function loadShellState() {
         ]);
 
         setMetric("node.nodeId", nodeID);
+        await loadNodeFirstSeen();
         await loadDiskUsage();
         await loadBandwidthUsage();
         applyUpdateStatus(updateStatus);
@@ -600,6 +617,17 @@ async function loadShellState() {
         statusElement.textContent = "Failed to resolve dashboard";
         hideBootstrapScreen();
         hideUpdateModal();
+        console.error(error);
+    }
+}
+
+async function loadNodeFirstSeen() {
+    try {
+        const firstSeen = await appBridge.NodeFirstSeen();
+        setMetric("node.firstSeen", formatFirstSeen(firstSeen));
+    } catch (error) {
+        setMetric("node.firstSeen", "Unavailable");
+        fieldElements.get("node.firstSeen")?.classList.remove("is-placeholder");
         console.error(error);
     }
 }

@@ -81,9 +81,10 @@ type bootstrapList struct {
 }
 
 type bootstrapNodeConfig struct {
-	NodeID string `yaml:"node_id"`
-	Host   string `yaml:"host"`
-	Port   int    `yaml:"port"`
+	NodeID    string `yaml:"node_id"`
+	AccountID string `yaml:"account_id"`
+	Host      string `yaml:"host"`
+	Port      int    `yaml:"port"`
 }
 
 type unsignedPeerFile struct {
@@ -241,29 +242,29 @@ func defaultMarshalIndexJSON(index usernameIndex) ([]byte, error) {
 }
 
 var (
-	ensureDataLayout  = datamanager.EnsureLayout
-	readDirectory     = os.ReadDir
-	readManagedFile   = datamanager.ReadFile
-	writeManagedFile  = datamanager.WriteFile
-	marshalIndexJSON  func(usernameIndex) ([]byte, error)
-	resolveNodeID     = nodeid.GetNodeID
-	createAccount     = accounts.Generate
-	recoverAccount    = accounts.Recover
-	saveLocalProfile  = accounts.SaveLocalProfile
-	httpClient        = &http.Client{Timeout: 5 * time.Second}
-	fetchRemoteList   = fetchRemoteBootstrapList
-	probeEndpoint     = measureEndpointLatency
-	dialBootstrap     = dialBootstrapEndpoint
-	listenBootstrap   = listenBootstrapEndpoint
-	wrapBootstrapConn = networkmanager.WrapConn
-	loadNodeRecords   = loadExistingNodeRecords
-	loadUsernameIndex = loadUsernameIndexCache
-	saveUsernameIndex = saveUsernameIndexCache
-	currentTime       = time.Now
-	scheduleAfter     = time.AfterFunc
-	signPeerOrMeta    = signPayload
-	randomSource      = rand.Reader
-	serverStartOnce   sync.Once
+	ensureDataLayout    = datamanager.EnsureLayout
+	readDirectory       = os.ReadDir
+	readManagedFile     = datamanager.ReadFile
+	writeManagedFile    = datamanager.WriteFile
+	marshalIndexJSON    func(usernameIndex) ([]byte, error)
+	resolveNodeID       = nodeid.GetNodeID
+	createAccount       = accounts.Generate
+	recoverAccount      = accounts.Recover
+	saveLocalProfile    = accounts.SaveLocalProfile
+	httpClient          = &http.Client{Timeout: 5 * time.Second}
+	fetchRemoteList     = fetchRemoteBootstrapList
+	probeEndpoint       = measureEndpointLatency
+	dialBootstrap       = dialBootstrapEndpoint
+	listenBootstrap     = listenBootstrapEndpoint
+	loadNodeRecords     = loadExistingNodeRecords
+	loadUsernameIndex   = loadUsernameIndexCache
+	saveUsernameIndex   = saveUsernameIndexCache
+	loadLocalAccountKey = accounts.LoadLocalKey
+	currentTime         = time.Now
+	scheduleAfter       = time.AfterFunc
+	signPeerOrMeta      = signPayload
+	randomSource        = rand.Reader
+	serverStartOnce     sync.Once
 
 	pendingSessionsMu sync.Mutex
 	pendingSessions   = map[string]*pendingSession{}
@@ -314,6 +315,17 @@ func LoadState() State {
 		PeerCount:      0,
 		Nodes:          nodes,
 	}
+}
+
+// LocalNodeFirstSeen returns the stored first-seen timestamp from the local
+// verified node metadata when this node has already joined the network.
+func LocalNodeFirstSeen() (string, error) {
+	records, err := loadNodeRecords(resolveNodeID())
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(records.NodeMeta.FirstSeen), nil
 }
 
 func peerFileCount(peersPath string) (int, error) {
@@ -488,15 +500,15 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 	if bootstrapNodeID != "" && bootstrapNodeID == localNodeID {
 		dialHost = "127.0.0.1"
 	}
+	expectedBootstrapAccountID := resolveExpectedBootstrapAccountID(bootstrapNodeID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	conn, err := dialBootstrap(ctx, dialHost, port)
+	conn, err := dialBootstrap(ctx, dialHost, port, expectedBootstrapAccountID)
 	if err != nil {
 		return ConnectResult{}, err
 	}
-	conn = wrapBootstrapConn(conn)
 
 	if err := conn.SetDeadline(currentTime().Add(bootstrapSessionTTL)); err != nil {
 		conn.Close()
@@ -1111,8 +1123,12 @@ func startBootstrapService(ctx context.Context) error {
 	if !ok || port <= 0 {
 		return nil
 	}
+	accountID, ok := bootstrapAccountIDForNode(list, localNodeID)
+	if !ok {
+		return errors.New("bootstrap account id is not configured")
+	}
 
-	listener, err := listenBootstrap(port)
+	listener, err := listenBootstrap(port, accountID)
 	if err != nil {
 		return err
 	}
@@ -1124,7 +1140,7 @@ func startBootstrapService(ctx context.Context) error {
 			return err
 		}
 
-		go handleBootstrapConnection(wrapBootstrapConn(conn))
+		go handleBootstrapConnection(conn)
 	}
 }
 
@@ -1258,6 +1274,45 @@ func bootstrapPortForNode(list bootstrapList, localNodeID string) (int, bool) {
 	}
 
 	return 0, false
+}
+
+func bootstrapAccountIDForNode(list bootstrapList, localNodeID string) (string, bool) {
+	for _, config := range list.Nodes {
+		if config.NodeID == localNodeID {
+			accountID := strings.TrimSpace(config.AccountID)
+			if accountID == "" {
+				return "", false
+			}
+
+			return accountID, true
+		}
+	}
+
+	return "", false
+}
+
+func expectedBootstrapAccountID(list bootstrapList, bootstrapNodeID string) string {
+	bootstrapNodeID = strings.TrimSpace(bootstrapNodeID)
+	if bootstrapNodeID == "" {
+		return ""
+	}
+
+	for _, config := range list.Nodes {
+		if strings.TrimSpace(config.NodeID) == bootstrapNodeID {
+			return strings.TrimSpace(config.AccountID)
+		}
+	}
+
+	return ""
+}
+
+func resolveExpectedBootstrapAccountID(bootstrapNodeID string) string {
+	list, err := loadBootstrapList(context.Background())
+	if err != nil {
+		return ""
+	}
+
+	return expectedBootstrapAccountID(list, bootstrapNodeID)
 }
 
 func defaultListenPort(localNodeID string) int {
@@ -1906,15 +1961,17 @@ func accountMetaRelativePath(accountID string) string {
 	return filepath.Join("network", "accounts", strings.TrimSpace(accountID)+metaFileSuffix)
 }
 
-func dialBootstrapEndpoint(ctx context.Context, host string, port int) (net.Conn, error) {
-	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	dialer := net.Dialer{}
-	return dialer.DialContext(ctx, "tcp4", address)
+func dialBootstrapEndpoint(ctx context.Context, host string, port int, expectedAccountID string) (net.Conn, error) {
+	return networkmanager.DialSecureTCP4(ctx, host, port, expectedAccountID)
 }
 
-func listenBootstrapEndpoint(port int) (net.Listener, error) {
-	address := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port))
-	return net.Listen("tcp4", address)
+func listenBootstrapEndpoint(port int, accountID string) (net.Listener, error) {
+	privateKey, err := loadLocalAccountKey(accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	return networkmanager.ListenSecureTCP4(port, privateKey)
 }
 
 func storePendingSession(session *pendingSession) {
