@@ -579,19 +579,7 @@ func Register(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, errors.New("username already exists")
 	}
 
-	result, err := finalizeCompletion(sessionID, session, material, usernameHash)
-	if err != nil {
-		return ConnectResult{}, err
-	}
-	index.add(usernameHash, material.AccountID)
-	if err := saveUsernameIndex(index); err != nil {
-		return ConnectResult{}, err
-	}
-	if _, err := saveLocalProfile(material.AccountID, normalizedUsername); err != nil {
-		return ConnectResult{}, err
-	}
-	result.Message = fmt.Sprintf("Registered %s with account %s. %s", normalizedUsername, material.AccountID, result.Message)
-	return result, nil
+	return finalizeUsernameCompletion(sessionID, session, material, normalizedUsername, usernameHash, index, "Registered %s with account %s. %s")
 }
 
 func Login(sessionID, username, password string) (ConnectResult, error) {
@@ -640,6 +628,10 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 		return ConnectResult{}, errors.New("username account mapping does not match recovered account")
 	}
 
+	return finalizeUsernameCompletion(sessionID, session, material, normalizedUsername, usernameHash, index, "Logged in as %s (%s). %s")
+}
+
+func finalizeUsernameCompletion(sessionID string, session *pendingSession, material accounts.Material, normalizedUsername, usernameHash string, index usernameIndex, messageFormat string) (ConnectResult, error) {
 	result, err := finalizeCompletion(sessionID, session, material, usernameHash)
 	if err != nil {
 		return ConnectResult{}, err
@@ -651,7 +643,7 @@ func Login(sessionID, username, password string) (ConnectResult, error) {
 	if _, err := saveLocalProfile(material.AccountID, normalizedUsername); err != nil {
 		return ConnectResult{}, err
 	}
-	result.Message = fmt.Sprintf("Logged in as %s (%s). %s", normalizedUsername, material.AccountID, result.Message)
+	result.Message = fmt.Sprintf(messageFormat, normalizedUsername, material.AccountID, result.Message)
 	return result, nil
 }
 
