@@ -36,6 +36,7 @@ const (
 	DefaultPort            = 58103
 	bootstrapSessionTTL    = 2 * time.Minute
 	bootstrapSessionIDSize = 16
+	usernameIndexPath      = "cache/username-index.map"
 )
 
 type Node struct {
@@ -97,6 +98,23 @@ type peerFile struct {
 }
 
 type unsignedMetaFile struct {
+	NodeID    string `json:"node_id"`
+	AccountID string `json:"account_id"`
+	FirstSeen string `json:"first_seen"`
+	Revision  int    `json:"revision"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type metaFile struct {
+	NodeID    string `json:"node_id"`
+	AccountID string `json:"account_id"`
+	FirstSeen string `json:"first_seen"`
+	Revision  int    `json:"revision"`
+	UpdatedAt string `json:"updated_at"`
+	Signature string `json:"signature"`
+}
+
+type legacyUnsignedMetaFile struct {
 	NodeID    string `json:"Node_ID"`
 	AccountID string `json:"AccountID"`
 	FirstSeen string `json:"First Seen"`
@@ -104,7 +122,7 @@ type unsignedMetaFile struct {
 	UpdatedAt string `json:"Updated At"`
 }
 
-type metaFile struct {
+type legacyMetaFile struct {
 	NodeID    string `json:"Node_ID"`
 	AccountID string `json:"AccountID"`
 	FirstSeen string `json:"First Seen"`
@@ -125,6 +143,7 @@ type bootstrapSessionStartResponse struct {
 	Reachable         bool   `json:"reachable"`
 	RecoveryAvailable bool   `json:"recoveryAvailable"`
 	AccountID         string `json:"accountId"`
+	UsernameHash      string `json:"usernameHash,omitempty"`
 	AccountBlob       []byte `json:"accountBlob,omitempty"`
 	FirstSeen         string `json:"firstSeen"`
 	Revision          int    `json:"revision"`
@@ -167,14 +186,44 @@ type existingNodeRecords struct {
 	KnownNode     bool
 }
 
+type usernameIndex map[string][]string
+
+func (file *metaFile) UnmarshalJSON(data []byte) error {
+	type metaFileAlias metaFile
+
+	var current metaFileAlias
+	if err := json.Unmarshal(data, &current); err != nil {
+		return err
+	}
+
+	var legacy legacyMetaFile
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+
+	file.NodeID = firstNonEmpty(current.NodeID, legacy.NodeID)
+	file.AccountID = firstNonEmpty(current.AccountID, legacy.AccountID)
+	file.FirstSeen = firstNonEmpty(current.FirstSeen, legacy.FirstSeen)
+	file.Revision = firstPositive(current.Revision, legacy.Revision)
+	file.UpdatedAt = firstNonEmpty(current.UpdatedAt, legacy.UpdatedAt)
+	file.Signature = firstNonEmpty(current.Signature, legacy.Signature)
+	return nil
+}
+
+func defaultMarshalIndexJSON(index usernameIndex) ([]byte, error) {
+	return json.MarshalIndent(index, "", "  ")
+}
+
 var (
 	ensureDataLayout  = datamanager.EnsureLayout
 	readDirectory     = os.ReadDir
 	readManagedFile   = datamanager.ReadFile
 	writeManagedFile  = datamanager.WriteFile
+	marshalIndexJSON  func(usernameIndex) ([]byte, error)
 	resolveNodeID     = nodeid.GetNodeID
 	createAccount     = accounts.Generate
 	recoverAccount    = accounts.Recover
+	saveLocalProfile  = accounts.SaveLocalProfile
 	httpClient        = &http.Client{Timeout: 5 * time.Second}
 	fetchRemoteList   = fetchRemoteBootstrapList
 	probeEndpoint     = measureEndpointLatency
@@ -182,6 +231,8 @@ var (
 	listenBootstrap   = listenBootstrapEndpoint
 	wrapBootstrapConn = networkmanager.WrapConn
 	loadNodeRecords   = loadExistingNodeRecords
+	loadUsernameIndex = loadUsernameIndexCache
+	saveUsernameIndex = saveUsernameIndexCache
 	currentTime       = time.Now
 	scheduleAfter     = time.AfterFunc
 	signPeerOrMeta    = signPayload
@@ -191,6 +242,10 @@ var (
 	pendingSessionsMu sync.Mutex
 	pendingSessions   = map[string]*pendingSession{}
 )
+
+func init() {
+	marshalIndexJSON = defaultMarshalIndexJSON
+}
 
 var errInvalidBootstrapEndpoint = errors.New("invalid bootstrap endpoint")
 
@@ -496,7 +551,113 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 		return ConnectResult{}, err
 	}
 
-	artifacts, err := buildCompletionArtifacts(session, material)
+	return finalizeCompletion(sessionID, session, material, "")
+}
+
+func Recover(sessionID, password string) (ConnectResult, error) {
+	return Complete(sessionID, password)
+}
+
+func Register(sessionID, username, password string) (ConnectResult, error) {
+	if err := validateCompletionInputs(sessionID, password); err != nil {
+		return ConnectResult{}, err
+	}
+
+	normalizedUsername, err := normalizeUsername(username)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	usernameHash := accounts.UsernameHash(normalizedUsername)
+
+	session, err := pendingSessionForCompletion(sessionID)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	material, err := createAccount(password)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	index, err := loadUsernameIndex()
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	if existingAccountIDs := index.accountIDsForHash(usernameHash); len(existingAccountIDs) > 0 && !containsAccountID(existingAccountIDs, material.AccountID) {
+		return ConnectResult{}, errors.New("username already exists")
+	}
+
+	return finalizeUsernameCompletion(sessionID, session, material, normalizedUsername, usernameHash, index, "Registered %s with account %s. %s")
+}
+
+func Login(sessionID, username, password string) (ConnectResult, error) {
+	if err := validateCompletionInputs(sessionID, password); err != nil {
+		return ConnectResult{}, err
+	}
+
+	normalizedUsername, err := normalizeUsername(username)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	usernameHash := accounts.UsernameHash(normalizedUsername)
+
+	session, err := pendingSessionForCompletion(sessionID)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	index, err := loadUsernameIndex()
+	if err != nil {
+		return ConnectResult{}, err
+	}
+
+	accountIDs := index.accountIDsForHash(usernameHash)
+	if len(accountIDs) == 0 {
+		return ConnectResult{}, errors.New("username does not exist")
+	}
+	if len(accountIDs) > 1 {
+		return ConnectResult{}, errors.New("username matches multiple accounts")
+	}
+	accountID := accountIDs[0]
+
+	blobData, err := readManagedFile(accountBlobRelativePath(accountID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ConnectResult{}, errors.New("account blob for username was not found locally")
+		}
+		return ConnectResult{}, err
+	}
+
+	material, err := recoverAccount(blobData, password)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	if material.AccountID != accountID {
+		return ConnectResult{}, errors.New("username account mapping does not match recovered account")
+	}
+
+	return finalizeUsernameCompletion(sessionID, session, material, normalizedUsername, usernameHash, index, "Logged in as %s (%s). %s")
+}
+
+func finalizeUsernameCompletion(sessionID string, session *pendingSession, material accounts.Material, normalizedUsername, usernameHash string, index usernameIndex, messageFormat string) (ConnectResult, error) {
+	result, err := finalizeCompletion(sessionID, session, material, usernameHash)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	index.add(usernameHash, material.AccountID)
+	if err := saveUsernameIndex(index); err != nil {
+		return ConnectResult{}, err
+	}
+	if _, err := saveLocalProfile(material.AccountID, normalizedUsername); err != nil {
+		return ConnectResult{}, err
+	}
+	result.Message = fmt.Sprintf(messageFormat, normalizedUsername, material.AccountID, result.Message)
+	return result, nil
+}
+
+func finalizeCompletion(sessionID string, session *pendingSession, material accounts.Material, usernameHash string) (ConnectResult, error) {
+	artifacts, err := buildCompletionArtifacts(session, material, usernameHash)
 	if err != nil {
 		return ConnectResult{}, err
 	}
@@ -519,6 +680,105 @@ func Complete(sessionID, password string) (ConnectResult, error) {
 	}
 
 	return completedConnectResult(session, material, peerPath, metaPath, accountBlobPath), nil
+}
+
+func normalizeUsername(username string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(username))
+	if normalized == "" {
+		return "", errors.New("username is required")
+	}
+
+	return normalized, nil
+}
+
+func (index usernameIndex) accountIDsForHash(usernameHash string) []string {
+	usernameHash = strings.TrimSpace(usernameHash)
+	if usernameHash == "" {
+		return nil
+	}
+
+	accountIDs := index[usernameHash]
+	if len(accountIDs) == 0 {
+		return nil
+	}
+
+	deduped := make([]string, 0, len(accountIDs))
+	seen := map[string]struct{}{}
+	for _, accountID := range accountIDs {
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			continue
+		}
+		if _, exists := seen[accountID]; exists {
+			continue
+		}
+		seen[accountID] = struct{}{}
+		deduped = append(deduped, accountID)
+	}
+
+	return deduped
+}
+
+func (index usernameIndex) add(usernameHash, accountID string) {
+	if index == nil {
+		return
+	}
+
+	usernameHash = strings.TrimSpace(usernameHash)
+	accountID = strings.TrimSpace(accountID)
+	if usernameHash == "" || accountID == "" {
+		return
+	}
+
+	for _, existing := range index[usernameHash] {
+		if strings.TrimSpace(existing) == accountID {
+			return
+		}
+	}
+
+	index[usernameHash] = append(index[usernameHash], accountID)
+}
+
+func containsAccountID(accountIDs []string, accountID string) bool {
+	accountID = strings.TrimSpace(accountID)
+	for _, existing := range accountIDs {
+		if strings.TrimSpace(existing) == accountID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func loadUsernameIndexCache() (usernameIndex, error) {
+	data, err := readManagedFile(usernameIndexPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return usernameIndex{}, nil
+		}
+
+		return nil, err
+	}
+
+	index := usernameIndex{}
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, err
+	}
+
+	return index, nil
+}
+
+func saveUsernameIndexCache(index usernameIndex) error {
+	if index == nil {
+		index = usernameIndex{}
+	}
+
+	data, err := marshalIndexJSON(index)
+	if err != nil {
+		return err
+	}
+
+	return writeManagedFile(usernameIndexPath, data, 0o644)
 }
 
 type completionArtifacts struct {
@@ -563,8 +823,11 @@ func completionMaterial(response bootstrapSessionStartResponse, password string)
 	return createAccount(password)
 }
 
-func buildCompletionArtifacts(session *pendingSession, material accounts.Material) (completionArtifacts, error) {
+func buildCompletionArtifacts(session *pendingSession, material accounts.Material, usernameHash string) (completionArtifacts, error) {
 	state := normalizeCompletionState(session.response)
+	if strings.TrimSpace(usernameHash) == "" {
+		usernameHash = strings.TrimSpace(session.response.UsernameHash)
+	}
 
 	peerData, err := buildPeerFile(session.response.ObservedIPv4, session.response.Port, material.AccountID, material.PrivateKey)
 	if err != nil {
@@ -575,7 +838,7 @@ func buildCompletionArtifacts(session *pendingSession, material accounts.Materia
 		return completionArtifacts{}, err
 	}
 	accountPubKeyData := accounts.BuildPublicKeyFile(material.PublicKey)
-	accountMetaData, err := accounts.BuildMeta(material.AccountID, material.PublicKey, state.accountCreatedAt, state.accountRevision, material.PrivateKey)
+	accountMetaData, err := accounts.BuildMetaWithUsernameHash(material.AccountID, material.PublicKey, state.accountCreatedAt, state.accountRevision, usernameHash, material.PrivateKey)
 	if err != nil {
 		return completionArtifacts{}, err
 	}
@@ -665,6 +928,26 @@ func completedConnectResult(session *pendingSession, material accounts.Material,
 
 	result.Message = fmt.Sprintf("Bootstrap completed in degraded mode. Saved %s, %s, %s, and %s.", material.LocalKeyPath, peerPath, metaPath, accountBlobPath)
 	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+
+	return 0
 }
 
 func startBootstrapService(ctx context.Context) error {
@@ -810,6 +1093,9 @@ func buildBootstrapStartResponse(remoteAddr net.Addr, request bootstrapSessionSt
 	}
 	if existingRecords.AccountMeta.Revision > 0 {
 		response.AccountRevision = existingRecords.AccountMeta.Revision + 1
+	}
+	if strings.TrimSpace(existingRecords.AccountMeta.UsernameHash) != "" {
+		response.UsernameHash = existingRecords.AccountMeta.UsernameHash
 	}
 	if strings.TrimSpace(existingRecords.NodeMeta.AccountID) != "" && len(existingRecords.AccountBlob) > 0 {
 		response.RecoveryAvailable = true
@@ -1095,14 +1381,28 @@ func verifyMetaFile(data []byte, nodeID, accountID string, publicKey ed25519.Pub
 	if file.Revision <= 0 {
 		return errors.New("node meta revision must be positive")
 	}
-	unsigned := unsignedMetaFile{
+	err := verifySignedPayload(unsignedMetaFile{
 		NodeID:    file.NodeID,
 		AccountID: file.AccountID,
 		FirstSeen: file.FirstSeen,
 		Revision:  file.Revision,
 		UpdatedAt: file.UpdatedAt,
+	}, file.Signature, publicKey)
+	if err == nil {
+		return nil
 	}
-	return verifySignedPayload(unsigned, file.Signature, publicKey)
+
+	if verifySignedPayload(legacyUnsignedMetaFile{
+		NodeID:    file.NodeID,
+		AccountID: file.AccountID,
+		FirstSeen: file.FirstSeen,
+		Revision:  file.Revision,
+		UpdatedAt: file.UpdatedAt,
+	}, file.Signature, publicKey) == nil {
+		return nil
+	}
+
+	return err
 }
 
 func verifySignedPayload(payload any, signature string, publicKey ed25519.PublicKey) error {
@@ -1110,11 +1410,9 @@ func verifySignedPayload(payload any, signature string, publicKey ed25519.Public
 	if err != nil {
 		return err
 	}
-	decodedSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature))
-	if err != nil {
+	if decodedSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature)); err != nil {
 		return err
-	}
-	if !ed25519.Verify(publicKey, data, decodedSignature) {
+	} else if !ed25519.Verify(publicKey, data, decodedSignature) {
 		return errors.New("signature verification failed")
 	}
 

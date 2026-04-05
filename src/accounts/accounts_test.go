@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,8 +21,11 @@ import (
 const (
 	testNodeID             = "node-123"
 	testAccountID          = "account-123"
+	testOtherAccountID     = "other-account"
 	testPassword           = "secret-pass"
 	testSpacedAccountID    = " account-123 "
+	testProfileUsername    = "Alice"
+	testMetaCreatedAt      = "2026-04-02T00:00:00Z"
 	testInvalidBase64      = "not-base64"
 	testWriteFailed        = "write failed"
 	testBuildBlobFormat    = "BuildBlob() error = %v"
@@ -282,6 +286,81 @@ func TestSaveLocalKeyUsesDerivedPath(t *testing.T) {
 	}
 }
 
+func TestUsernameHashAndLocalProfile(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	currentTime = func() time.Time {
+		return time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)
+	}
+	if UsernameHash(" Alice ") != UsernameHash("alice") {
+		t.Fatal("UsernameHash() mismatch for normalized username")
+	}
+
+	profileData, err := BuildLocalProfile(testAccountID, " Alice ")
+	if err != nil {
+		t.Fatalf("BuildLocalProfile() error = %v", err)
+	}
+	var profile LocalProfile
+	if err := json.Unmarshal(profileData, &profile); err != nil {
+		t.Fatalf(testUnmarshalFormat, err)
+	}
+	if profile.AccountID != testAccountID || profile.Username != "Alice" {
+		t.Fatalf("BuildLocalProfile() = %#v, want trimmed account/username", profile)
+	}
+	if profile.UsernameHash != UsernameHash("alice") {
+		t.Fatalf("BuildLocalProfile().UsernameHash = %q, want normalized username hash", profile.UsernameHash)
+	}
+	if profile.UpdatedAt != "2026-04-04T12:00:00Z" {
+		t.Fatalf("BuildLocalProfile().UpdatedAt = %q, want %q", profile.UpdatedAt, "2026-04-04T12:00:00Z")
+	}
+}
+
+func TestBuildAndSaveLocalProfileReturnErrors(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	if _, err := BuildLocalProfile(" ", testProfileUsername); err == nil {
+		t.Fatal("BuildLocalProfile() error = nil, want blank account id failure")
+	}
+	if _, err := BuildLocalProfile(testAccountID, " "); err == nil {
+		t.Fatal("BuildLocalProfile() error = nil, want blank username failure")
+	}
+	if _, err := SaveLocalProfile(" ", testProfileUsername); err == nil {
+		t.Fatal("SaveLocalProfile() error = nil, want blank account id failure")
+	}
+	if _, err := SaveLocalProfile(testAccountID, " "); err == nil {
+		t.Fatal("SaveLocalProfile() error = nil, want blank username failure")
+	}
+
+	writtenPath := ""
+	writeProfileFile = func(path string, data []byte, perm os.FileMode) error {
+		writtenPath = path
+		if perm != profileFilePerm {
+			t.Fatalf("writeProfileFile() perm = %#o, want %#o", perm, profileFilePerm)
+		}
+		if !strings.Contains(string(data), `"username": "Alice"`) {
+			t.Fatalf("writeProfileFile() data = %s, want profile username json", string(data))
+		}
+		return nil
+	}
+
+	gotPath, err := SaveLocalProfile(testAccountID, testProfileUsername)
+	if err != nil {
+		t.Fatalf("SaveLocalProfile() error = %v", err)
+	}
+	wantPath := filepath.Join(localAccountDir, testAccountID+profileSuffix)
+	if gotPath != wantPath || writtenPath != wantPath || LocalProfilePath(testAccountID) != wantPath {
+		t.Fatalf("SaveLocalProfile() path handling = (%q, %q, %q), want %q", gotPath, writtenPath, LocalProfilePath(testAccountID), wantPath)
+	}
+
+	wantErr := errors.New(testWriteFailed)
+	writeProfileFile = func(string, []byte, os.FileMode) error { return wantErr }
+	if _, err := SaveLocalProfile(testAccountID, testProfileUsername); !errors.Is(err, wantErr) {
+		t.Fatalf("SaveLocalProfile() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestBuildAndVerifyAccountTrustFiles(t *testing.T) {
 	restore := stubAccountHooks(t)
 	defer restore()
@@ -301,7 +380,7 @@ func TestBuildAndVerifyAccountTrustFiles(t *testing.T) {
 		t.Fatal("VerifyPublicKeyFile() returned a different public key")
 	}
 
-	metaData, err := BuildMeta(accountID, publicKey, "2026-04-02T00:00:00Z", 1, privateKey)
+	metaData, err := BuildMeta(accountID, publicKey, testMetaCreatedAt, 1, privateKey)
 	if err != nil {
 		t.Fatalf(testBuildMetaFormat, err)
 	}
@@ -311,6 +390,29 @@ func TestBuildAndVerifyAccountTrustFiles(t *testing.T) {
 	}
 	if meta.AccountID != accountID {
 		t.Fatalf("VerifyMeta().AccountID = %q, want %q", meta.AccountID, accountID)
+	}
+}
+
+func TestBuildAndVerifyAccountMetaWithUsernameHash(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(publicKey)
+
+	metaData, err := BuildMetaWithUsernameHash(accountID, publicKey, testMetaCreatedAt, 1, UsernameHash("Alice"), privateKey)
+	if err != nil {
+		t.Fatalf(testBuildMetaFormat, err)
+	}
+	meta, err := VerifyMeta(accountID, publicKey, metaData)
+	if err != nil {
+		t.Fatalf("VerifyMeta() error = %v", err)
+	}
+	if meta.UsernameHash != UsernameHash("Alice") {
+		t.Fatalf("VerifyMeta().UsernameHash = %q, want %q", meta.UsernameHash, UsernameHash("Alice"))
 	}
 }
 
@@ -647,7 +749,7 @@ func TestVerifyMetaErrors(t *testing.T) {
 		t.Fatal("VerifyMeta() error = nil, want json failure")
 	}
 
-	metaData, err := BuildMeta(accountID, publicKey, "2026-04-02T00:00:00Z", 1, privateKey)
+	metaData, err := BuildMeta(accountID, publicKey, testMetaCreatedAt, 1, privateKey)
 	if err != nil {
 		t.Fatalf(testBuildMetaFormat, err)
 	}
@@ -656,11 +758,11 @@ func TestVerifyMetaErrors(t *testing.T) {
 		t.Fatalf(testUnmarshalFormat, err)
 	}
 
-	if _, err := VerifyMeta("other-account", publicKey, metaData); err == nil {
+	if _, err := VerifyMeta(testOtherAccountID, publicKey, metaData); err == nil {
 		t.Fatal("VerifyMeta() error = nil, want account mismatch")
 	}
 
-	meta.AccountID = "other-account"
+	meta.AccountID = testOtherAccountID
 	accountMismatchData := mustMarshalJSON(t, meta)
 	if _, err := VerifyMeta(accountID, publicKey, accountMismatchData); err == nil {
 		t.Fatal("VerifyMeta() error = nil, want public key/account mismatch")
@@ -903,6 +1005,7 @@ func stubAccountHooks(t *testing.T) func() {
 	originalResolveNodeID := resolveNodeID
 	originalReadKeyFile := readKeyFile
 	originalWriteKeyFile := writeKeyFile
+	originalWriteProfileFile := writeProfileFile
 	originalGenerateKeyPair := generateKeyPair
 	originalRandomReader := randomReader
 	originalCurrentTime := currentTime
@@ -914,6 +1017,7 @@ func stubAccountHooks(t *testing.T) func() {
 	resolveNodeID = func() string { return testNodeID }
 	readKeyFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
 	writeKeyFile = func(string, []byte, os.FileMode) error { return nil }
+	writeProfileFile = func(string, []byte, os.FileMode) error { return nil }
 	generateKeyPair = func(io.Reader) (ed25519.PublicKey, ed25519.PrivateKey, error) {
 		return ed25519.GenerateKey(rand.Reader)
 	}
@@ -930,6 +1034,7 @@ func stubAccountHooks(t *testing.T) func() {
 		resolveNodeID = originalResolveNodeID
 		readKeyFile = originalReadKeyFile
 		writeKeyFile = originalWriteKeyFile
+		writeProfileFile = originalWriteProfileFile
 		generateKeyPair = originalGenerateKeyPair
 		randomReader = originalRandomReader
 		currentTime = originalCurrentTime

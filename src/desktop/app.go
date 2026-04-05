@@ -19,6 +19,9 @@ var (
 	startBootstrapServer = bootstrapmanager.StartService
 	connectBootstrap     = bootstrapmanager.Connect
 	completeBootstrap    = bootstrapmanager.Complete
+	recoverBootstrap     = bootstrapmanager.Recover
+	loginBootstrap       = bootstrapmanager.Login
+	registerBootstrap    = bootstrapmanager.Register
 	resolveDiskUsage     = datamanager.Snapshot
 	resolveNetworkUsage  = networkmanager.Snapshot
 	resolveVersion       = version.Get
@@ -90,6 +93,21 @@ func (a *App) ConnectBootstrap(host string, port int, nodeID string) (bootstrapm
 // required account password.
 func (a *App) CompleteBootstrap(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
 	return completeBootstrap(sessionID, password)
+}
+
+// RecoverBootstrapAccount resumes a held bootstrap session by unlocking a node-linked account.
+func (a *App) RecoverBootstrapAccount(sessionID, password string) (bootstrapmanager.ConnectResult, error) {
+	return recoverBootstrap(sessionID, password)
+}
+
+// LoginBootstrapAccount resumes a held bootstrap session by logging into a named account.
+func (a *App) LoginBootstrapAccount(sessionID, username, password string) (bootstrapmanager.ConnectResult, error) {
+	return loginBootstrap(sessionID, username, password)
+}
+
+// RegisterBootstrapAccount resumes a held bootstrap session by creating a new username/password account.
+func (a *App) RegisterBootstrapAccount(sessionID, username, password string) (bootstrapmanager.ConnectResult, error) {
+	return registerBootstrap(sessionID, username, password)
 }
 
 // DiskUsage returns the current managed-data disk usage snapshot.
