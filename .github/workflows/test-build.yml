@@ -55,7 +55,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Download coverage profiles
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: coverage-*
           path: coverage-artifacts
