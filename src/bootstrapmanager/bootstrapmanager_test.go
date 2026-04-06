@@ -5323,7 +5323,7 @@ func loadBootstrapListFixture(t *testing.T) []byte {
 		t.Fatal("runtime.Caller() failed to resolve bootstrap test path")
 	}
 
-	bootstrapListPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "network", "bootstrap-list.yaml")
+	bootstrapListPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "network", "GatewayNodes.yaml")
 	data, err := os.ReadFile(bootstrapListPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", bootstrapListPath, err)

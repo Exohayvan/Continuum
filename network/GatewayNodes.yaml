@@ -1,0 +1,7 @@
+version: 1
+nodes:
+  na-east:
+    node_id: "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
+    account_id: "3d06879ec5324c32f157f9ce014997c95bef0b1f0dcd9261c2e778a983b0a009"
+    host: "162.191.52.239"
+    port: 58103

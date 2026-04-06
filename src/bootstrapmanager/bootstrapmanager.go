@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	BootstrapListURL         = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/bootstrap-list.yaml"
+	BootstrapListURL         = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/GatewayNodes.yaml"
 	PublicIPv4LookupURL      = "https://api.ipify.org"
 	peerFileSuffix           = ".peer"
 	metaFileSuffix           = ".meta"
