@@ -340,13 +340,13 @@ jobs:
       contents: write
     steps:
       - name: Download release metadata
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-metadata
           path: release-metadata
 
       - name: Download desktop artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: continuum-*
           path: release-assets
