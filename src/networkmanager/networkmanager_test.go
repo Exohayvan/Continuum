@@ -15,8 +15,13 @@ import (
 const (
 	readErrorFormat       = "Read() error = %v"
 	writeErrorFormat      = "Write() error = %v"
+	replyWantFormat       = "reply = %q, want %q"
+	listenerErrorFormat   = "listener goroutine error = %v"
+	generateKeyFormat     = "GenerateKey() error = %v"
+	listenSecureFormat    = "ListenSecureTCP4() error = %v"
 	totalReadBytesFormat  = "Snapshot().TotalReadBytes = %d, want %d"
 	totalWriteBytesFormat = "Snapshot().TotalWriteBytes = %d, want %d"
+	testLoopbackHost      = "127.0.0.1"
 )
 
 func TestSnapshotReturnsZeroWhenNoTrafficRecorded(t *testing.T) {
@@ -176,7 +181,7 @@ func TestWrapConnTracksTraffic(t *testing.T) {
 		t.Fatalf(readErrorFormat, err)
 	}
 	if !bytes.Equal(reply, []byte("pong")) {
-		t.Fatalf("reply = %q, want %q", reply, "pong")
+		t.Fatalf(replyWantFormat, reply, "pong")
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("wrapped conn goroutine error = %v", err)
@@ -199,7 +204,7 @@ func TestDialTCP4ReturnsTrackedConn(t *testing.T) {
 		return now
 	}
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", net.JoinHostPort(testLoopbackHost, "0"))
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
@@ -227,7 +232,7 @@ func TestDialTCP4ReturnsTrackedConn(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	conn, err := DialTCP4(context.Background(), "127.0.0.1", port)
+	conn, err := DialTCP4(context.Background(), testLoopbackHost, port)
 	if err != nil {
 		t.Fatalf("DialTCP4() error = %v", err)
 	}
@@ -241,10 +246,10 @@ func TestDialTCP4ReturnsTrackedConn(t *testing.T) {
 		t.Fatalf(readErrorFormat, err)
 	}
 	if !bytes.Equal(reply, []byte("pong")) {
-		t.Fatalf("reply = %q, want %q", reply, "pong")
+		t.Fatalf(replyWantFormat, reply, "pong")
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("listener goroutine error = %v", err)
+		t.Fatalf(listenerErrorFormat, err)
 	}
 
 	usage := Snapshot()
@@ -292,7 +297,7 @@ func TestListenTCP4TracksAcceptedConn(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	clientConn, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port)))
+	clientConn, err := net.Dial("tcp4", net.JoinHostPort(testLoopbackHost, fmt.Sprintf("%d", port)))
 	if err != nil {
 		t.Fatalf("net.Dial() error = %v", err)
 	}
@@ -306,10 +311,10 @@ func TestListenTCP4TracksAcceptedConn(t *testing.T) {
 		t.Fatalf(readErrorFormat, err)
 	}
 	if !bytes.Equal(reply, []byte("pong!")) {
-		t.Fatalf("reply = %q, want %q", reply, "pong!")
+		t.Fatalf(replyWantFormat, reply, "pong!")
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("listener goroutine error = %v", err)
+		t.Fatalf(listenerErrorFormat, err)
 	}
 
 	usage := Snapshot()
@@ -331,13 +336,13 @@ func TestDialSecureTCP4ReturnsTrackedConn(t *testing.T) {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyFormat, err)
 	}
 	expectedAccountID := accountIDFromPublicKey(publicKey)
 
 	listener, err := ListenSecureTCP4(0, privateKey)
 	if err != nil {
-		t.Fatalf("ListenSecureTCP4() error = %v", err)
+		t.Fatalf(listenSecureFormat, err)
 	}
 	defer listener.Close()
 
@@ -363,7 +368,7 @@ func TestDialSecureTCP4ReturnsTrackedConn(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	conn, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, expectedAccountID)
+	conn, err := DialSecureTCP4(context.Background(), testLoopbackHost, port, expectedAccountID)
 	if err != nil {
 		t.Fatalf("DialSecureTCP4() error = %v", err)
 	}
@@ -377,10 +382,10 @@ func TestDialSecureTCP4ReturnsTrackedConn(t *testing.T) {
 		t.Fatalf(readErrorFormat, err)
 	}
 	if !bytes.Equal(reply, []byte("pong!")) {
-		t.Fatalf("reply = %q, want %q", reply, "pong!")
+		t.Fatalf(replyWantFormat, reply, "pong!")
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("listener goroutine error = %v", err)
+		t.Fatalf(listenerErrorFormat, err)
 	}
 
 	usage := Snapshot()
@@ -397,7 +402,7 @@ func TestDialSecureTCP4RejectsUnexpectedAccountID(t *testing.T) {
 
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyFormat, err)
 	}
 	otherPublicKey, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -406,7 +411,7 @@ func TestDialSecureTCP4RejectsUnexpectedAccountID(t *testing.T) {
 
 	listener, err := ListenSecureTCP4(0, privateKey)
 	if err != nil {
-		t.Fatalf("ListenSecureTCP4() error = %v", err)
+		t.Fatalf(listenSecureFormat, err)
 	}
 	defer listener.Close()
 
@@ -422,11 +427,11 @@ func TestDialSecureTCP4RejectsUnexpectedAccountID(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	if _, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, accountIDFromPublicKey(otherPublicKey)); err == nil {
+	if _, err := DialSecureTCP4(context.Background(), testLoopbackHost, port, accountIDFromPublicKey(otherPublicKey)); err == nil {
 		t.Fatal("DialSecureTCP4() error = nil, want account id verification failure")
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("listener goroutine error = %v", err)
+		t.Fatalf(listenerErrorFormat, err)
 	}
 }
 
@@ -435,12 +440,12 @@ func TestListenSecureTCP4IgnoresPlainTCPProbe(t *testing.T) {
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
+		t.Fatalf(generateKeyFormat, err)
 	}
 
 	listener, err := ListenSecureTCP4(0, privateKey)
 	if err != nil {
-		t.Fatalf("ListenSecureTCP4() error = %v", err)
+		t.Fatalf(listenSecureFormat, err)
 	}
 	defer listener.Close()
 
@@ -466,7 +471,7 @@ func TestListenSecureTCP4IgnoresPlainTCPProbe(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	probeConn, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port)))
+	probeConn, err := net.Dial("tcp4", net.JoinHostPort(testLoopbackHost, fmt.Sprintf("%d", port)))
 	if err != nil {
 		t.Fatalf("net.Dial() probe error = %v", err)
 	}
@@ -474,7 +479,7 @@ func TestListenSecureTCP4IgnoresPlainTCPProbe(t *testing.T) {
 		t.Fatalf("probeConn.Close() error = %v", err)
 	}
 
-	conn, err := DialSecureTCP4(context.Background(), "127.0.0.1", port, accountIDFromPublicKey(publicKey))
+	conn, err := DialSecureTCP4(context.Background(), testLoopbackHost, port, accountIDFromPublicKey(publicKey))
 	if err != nil {
 		t.Fatalf("DialSecureTCP4() error = %v", err)
 	}
@@ -488,10 +493,10 @@ func TestListenSecureTCP4IgnoresPlainTCPProbe(t *testing.T) {
 		t.Fatalf(readErrorFormat, err)
 	}
 	if !bytes.Equal(reply, []byte("pong")) {
-		t.Fatalf("reply = %q, want %q", reply, "pong")
+		t.Fatalf(replyWantFormat, reply, "pong")
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("listener goroutine error = %v", err)
+		t.Fatalf(listenerErrorFormat, err)
 	}
 }
 
