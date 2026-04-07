@@ -31,8 +31,10 @@ const (
 )
 
 var (
-	currentTime  = time.Now
-	managerState = trackedState{}
+	currentTime        = time.Now
+	secureRandomReader = rand.Reader
+	newX25519PublicKey = ecdh.X25519().NewPublicKey
+	managerState       = trackedState{}
 )
 
 type transferEvent struct {
@@ -283,7 +285,7 @@ func accountIDFromPublicKey(publicKey ed25519.PublicKey) string {
 
 func clientSecureConn(ctx context.Context, conn net.Conn, expectedAccountID string) (net.Conn, error) {
 	curve := ecdh.X25519()
-	clientPrivateKey, err := curve.GenerateKey(rand.Reader)
+	clientPrivateKey, err := curve.GenerateKey(secureRandomReader)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +322,7 @@ func clientSecureConn(ctx context.Context, conn net.Conn, expectedAccountID stri
 	if err != nil {
 		return nil, err
 	}
-	serverPublicKey, err := curve.NewPublicKey(serverPublicKeyBytes)
+	serverPublicKey, err := newX25519PublicKey(serverPublicKeyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +342,7 @@ func clientSecureConn(ctx context.Context, conn net.Conn, expectedAccountID stri
 		return nil, err
 	}
 
-	return newSecureConn(conn, sharedSecret, clientPublicKey, serverPublicKeyBytes, true)
+	return newSecureConn(conn, sharedSecret, clientPublicKey, serverPublicKeyBytes, true), nil
 }
 
 func serverSecureConn(conn net.Conn, privateKey ed25519.PrivateKey) (net.Conn, error) {
@@ -357,12 +359,12 @@ func serverSecureConn(conn net.Conn, privateKey ed25519.PrivateKey) (net.Conn, e
 	if err != nil {
 		return nil, err
 	}
-	clientPublicKey, err := curve.NewPublicKey(clientPublicKeyBytes)
+	clientPublicKey, err := newX25519PublicKey(clientPublicKeyBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	serverPrivateKey, err := curve.GenerateKey(rand.Reader)
+	serverPrivateKey, err := curve.GenerateKey(secureRandomReader)
 	if err != nil {
 		return nil, err
 	}
@@ -374,10 +376,7 @@ func serverSecureConn(conn net.Conn, privateKey ed25519.PrivateKey) (net.Conn, e
 		ServerPublicKey: base64.StdEncoding.EncodeToString(serverPublicKeyBytes),
 		AccountID:       accountID,
 	}
-	signature, err := signProof(privateKey, proof)
-	if err != nil {
-		return nil, err
-	}
+	signature := signProof(privateKey, proof)
 	if err := writeJSONMessage(conn, secureServerHello{
 		Protocol:      sessionProtocol,
 		AccountID:     accountID,
@@ -393,49 +392,36 @@ func serverSecureConn(conn net.Conn, privateKey ed25519.PrivateKey) (net.Conn, e
 		return nil, err
 	}
 
-	return newSecureConn(conn, sharedSecret, clientPublicKeyBytes, serverPublicKeyBytes, false)
+	return newSecureConn(conn, sharedSecret, clientPublicKeyBytes, serverPublicKeyBytes, false), nil
 }
 
-func newSecureConn(conn net.Conn, sharedSecret, clientPublicKey, serverPublicKey []byte, clientRole bool) (net.Conn, error) {
-	readKey, writeKey, err := deriveSessionKeys(sharedSecret, clientPublicKey, serverPublicKey, clientRole)
-	if err != nil {
-		return nil, err
-	}
+func newSecureConn(conn net.Conn, sharedSecret, clientPublicKey, serverPublicKey []byte, clientRole bool) net.Conn {
+	readKey, writeKey := deriveSessionKeys(sharedSecret, clientPublicKey, serverPublicKey, clientRole)
 
-	readAEAD, err := chacha20poly1305.New(readKey)
-	if err != nil {
-		return nil, err
-	}
-	writeAEAD, err := chacha20poly1305.New(writeKey)
-	if err != nil {
-		return nil, err
-	}
+	readAEAD, _ := chacha20poly1305.New(readKey)
+	writeAEAD, _ := chacha20poly1305.New(writeKey)
 
 	return &secureConn{
 		conn:      conn,
 		readAEAD:  readAEAD,
 		writeAEAD: writeAEAD,
-	}, nil
+	}
 }
 
-func deriveSessionKeys(sharedSecret, clientPublicKey, serverPublicKey []byte, clientRole bool) ([]byte, []byte, error) {
+func deriveSessionKeys(sharedSecret, clientPublicKey, serverPublicKey []byte, clientRole bool) ([]byte, []byte) {
 	transcript := append(append([]byte(sessionProtocol), clientPublicKey...), serverPublicKey...)
 	reader := hkdf.New(sha256.New, sharedSecret, transcript, []byte("continuum-bootstrap-transport"))
 
 	clientWriteKey := make([]byte, chacha20poly1305.KeySize)
 	serverWriteKey := make([]byte, chacha20poly1305.KeySize)
-	if _, err := io.ReadFull(reader, clientWriteKey); err != nil {
-		return nil, nil, err
-	}
-	if _, err := io.ReadFull(reader, serverWriteKey); err != nil {
-		return nil, nil, err
-	}
+	_, _ = io.ReadFull(reader, clientWriteKey)
+	_, _ = io.ReadFull(reader, serverWriteKey)
 
 	if clientRole {
-		return serverWriteKey, clientWriteKey, nil
+		return serverWriteKey, clientWriteKey
 	}
 
-	return clientWriteKey, serverWriteKey, nil
+	return clientWriteKey, serverWriteKey
 }
 
 func (w *secureConn) Read(buffer []byte) (int, error) {
@@ -587,20 +573,13 @@ func decodeFixedBase64(encoded string, expectedLength int) ([]byte, error) {
 	return decoded, nil
 }
 
-func signProof(privateKey ed25519.PrivateKey, proof secureServerProof) (string, error) {
-	data, err := json.Marshal(proof)
-	if err != nil {
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, data)), nil
+func signProof(privateKey ed25519.PrivateKey, proof secureServerProof) string {
+	data, _ := json.Marshal(proof)
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, data))
 }
 
 func verifySignedProof(publicKey ed25519.PublicKey, proof secureServerProof, signature string) error {
-	data, err := json.Marshal(proof)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(proof)
 
 	decodedSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature))
 	if err != nil {

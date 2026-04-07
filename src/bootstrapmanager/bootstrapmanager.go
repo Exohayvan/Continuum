@@ -1778,10 +1778,7 @@ func loadExistingAccountBlob(accountID string, accountPubKey ed25519.PublicKey) 
 }
 
 func discoverPublicIPv4FromService(ctx context.Context) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, PublicIPv4LookupURL, nil)
-	if err != nil {
-		return "", err
-	}
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, PublicIPv4LookupURL, nil)
 	request.Header.Set("User-Agent", "continuum-bootstrap")
 
 	response, err := httpClient.Do(request)

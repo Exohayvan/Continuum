@@ -91,6 +91,8 @@ const (
 	testAliceHashKey                         = "hash-alice"
 	testInvalidJSON                          = "not-json"
 	testInvalidBase64                        = "not-base64"
+	testInvalidIPv4                          = "not-an-ip"
+	testOKStatusText                         = "200 OK"
 	testWriteFailedText                      = "write failed"
 	testSignFailedText                       = "sign failed"
 	testFinalizeFailedText                   = "finalize failed"
@@ -3544,6 +3546,34 @@ func TestBootstrapPortForNodeUsesDefaultPortWhenConfiguredPortIsInvalid(t *testi
 	}
 }
 
+func TestBootstrapAccountIDForNodeReturnsMissingWhenNodeIsUnknown(t *testing.T) {
+	accountID, ok := bootstrapAccountIDForNode(bootstrapList{
+		Nodes: map[string]bootstrapNodeConfig{
+			testBootstrapName: {
+				NodeID:    testBootstrapNodeID,
+				AccountID: testBootstrapAccountID,
+			},
+		},
+	}, testJoiningNodeID)
+	if ok || accountID != "" {
+		t.Fatalf("bootstrapAccountIDForNode() = (%q, %t), want empty false", accountID, ok)
+	}
+}
+
+func TestExpectedBootstrapAccountIDReturnsEmptyWhenNodeIsUnknown(t *testing.T) {
+	got := expectedBootstrapAccountID(bootstrapList{
+		Nodes: map[string]bootstrapNodeConfig{
+			testBootstrapName: {
+				NodeID:    testBootstrapNodeID,
+				AccountID: testBootstrapAccountID,
+			},
+		},
+	}, testJoiningNodeID)
+	if got != "" {
+		t.Fatalf("expectedBootstrapAccountID() = %q, want empty", got)
+	}
+}
+
 func TestDefaultListenPortReturnsDefaultOnLoadError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -4261,13 +4291,27 @@ func TestDiscoverPublicIPv4FromServiceReturnsErrors(t *testing.T) {
 		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Status:     "200 OK",
+				Status:     testOKStatusText,
 				Body:       io.NopCloser(strings.NewReader(testInvalidJSON)),
 			}, nil
 		})}
 
 		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
 			t.Fatal("discoverPublicIPv4FromService() error = nil, want invalid IPv4 failure")
+		}
+	})
+
+	t.Run("read failure", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     testOKStatusText,
+				Body:       failingReadCloser{err: errors.New(testLoadFailedText)},
+			}, nil
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want read failure")
 		}
 	})
 }
@@ -4283,7 +4327,7 @@ func TestDiscoverPublicIPv4FromServiceReturnsIPv4(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Status:     "200 OK",
+			Status:     testOKStatusText,
 			Body:       io.NopCloser(strings.NewReader(testDiscoveredPublicIPv4 + "\n")),
 		}, nil
 	})}
@@ -4307,12 +4351,30 @@ func TestIsRoutableIPv4(t *testing.T) {
 		{address: testPrivateObservedIPv4, want: false},
 		{address: "100.64.0.1", want: false},
 		{address: "", want: false},
-		{address: "not-an-ip", want: false},
+		{address: testInvalidIPv4, want: false},
+		{address: "::1", want: false},
 	}
 
 	for _, tc := range cases {
 		if got := isRoutableIPv4(tc.address); got != tc.want {
 			t.Fatalf("isRoutableIPv4(%q) = %t, want %t", tc.address, got, tc.want)
+		}
+	}
+}
+
+func TestIsLoopbackIPv4(t *testing.T) {
+	cases := []struct {
+		address string
+		want    bool
+	}{
+		{address: testLoopbackHost, want: true},
+		{address: testBootstrapHost, want: false},
+		{address: testInvalidIPv4, want: false},
+	}
+
+	for _, tc := range cases {
+		if got := isLoopbackIPv4(tc.address); got != tc.want {
+			t.Fatalf("isLoopbackIPv4(%q) = %t, want %t", tc.address, got, tc.want)
 		}
 	}
 }
@@ -4888,6 +4950,46 @@ func TestBuildCompletionArtifactsReturnsPublicIPv4DiscoveryError(t *testing.T) {
 	}, material, "")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("buildCompletionArtifacts() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestBuildCompletionArtifactsReturnsUnusablePeerIPv4Error(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	_, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testPrivateBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testInvalidIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err == nil {
+		t.Fatal("buildCompletionArtifacts() error = nil, want unusable peer IPv4 failure")
+	}
+}
+
+func TestBuildCompletionArtifactsReturnsNonRoutableDiscoveredIPv4Error(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	discoverPublicIPv4 = func(context.Context) (string, error) {
+		return testPrivateObservedIPv4, nil
+	}
+
+	_, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err == nil {
+		t.Fatal("buildCompletionArtifacts() error = nil, want non-routable discovered IPv4 failure")
 	}
 }
 
@@ -5478,6 +5580,18 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (f failingReadCloser) Read([]byte) (int, error) {
+	return 0, f.err
+}
+
+func (f failingReadCloser) Close() error {
+	return nil
 }
 
 type stubConn struct {
