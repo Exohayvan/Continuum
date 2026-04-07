@@ -53,9 +53,14 @@ const (
 	testMkdirAllErrorFormat                  = "MkdirAll() error = %v"
 	testWriteFileErrorFormat                 = "WriteFile() error = %v"
 	testLoadStateNeedsBootstrapText          = "LoadState() NeedsBootstrap = false, want true"
+	testListenBootstrapPortFormat            = "listenBootstrap() port = %d, want %d"
+	testListenBootstrapAccountIDFormat       = "listenBootstrap() accountID = %q, want %q"
 	testBuildAccountFixturesErrorFormat      = "buildAccountFixtures() error = %v"
 	testBuildAccountFixturesOtherErrorFormat = "buildAccountFixtures() other error = %v"
 	testBuildMetaWithUsernameHashErrFmt      = "BuildMetaWithUsernameHash() error = %v"
+	testBuildCompletionArtifactsErrFmt       = "buildCompletionArtifacts() error = %v"
+	testUnmarshalPeerDataErrorFormat         = "Unmarshal(peerData) error = %v"
+	testPeerDataIPv4Format                   = "peerData IPv4 = %q, want %q"
 	testConnectErrorFormat                   = "Connect() error = %v"
 	testConnectWantErrorFormat               = "Connect() error = %v, want %v"
 	testCompleteWantErrorFormat              = "Complete() error = %v, want %s"
@@ -1084,10 +1089,10 @@ func TestStartServiceInvokesBootstrapLoop(t *testing.T) {
 	called := make(chan struct{}, 1)
 	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
 		if port != 58103 {
-			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
 		}
 		if accountID != testBootstrapAccountID {
-			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
 		}
 		called <- struct{}{}
 		return &failingListener{acceptErr: errors.New("stop")}, nil
@@ -1114,10 +1119,10 @@ func TestStartBootstrapServiceReturnsAcceptError(t *testing.T) {
 	wantErr := errors.New("listener stopped")
 	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
 		if port != 58103 {
-			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
 		}
 		if accountID != testBootstrapAccountID {
-			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
 		}
 		return &failingListener{acceptErr: wantErr}, nil
 	}
@@ -1208,10 +1213,10 @@ func TestStartBootstrapServiceReturnsListenError(t *testing.T) {
 	wantErr := errors.New("listen failed")
 	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
 		if port != 58103 {
-			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
 		}
 		if accountID != testBootstrapAccountID {
-			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
 		}
 		return nil, wantErr
 	}
@@ -4795,15 +4800,15 @@ func TestBuildCompletionArtifactsUsesBootstrapHostForLoopbackObservedIPv4(t *tes
 		},
 	}, material, "")
 	if err != nil {
-		t.Fatalf("buildCompletionArtifacts() error = %v", err)
+		t.Fatalf(testBuildCompletionArtifactsErrFmt, err)
 	}
 
 	var file peerFile
 	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
-		t.Fatalf("Unmarshal(peerData) error = %v", err)
+		t.Fatalf(testUnmarshalPeerDataErrorFormat, err)
 	}
 	if file.IPv4 != testBootstrapHost {
-		t.Fatalf("peerData IPv4 = %q, want %q", file.IPv4, testBootstrapHost)
+		t.Fatalf(testPeerDataIPv4Format, file.IPv4, testBootstrapHost)
 	}
 }
 
@@ -4825,15 +4830,15 @@ func TestBuildCompletionArtifactsUsesDiscoveredPublicIPv4ForPublicBootstrap(t *t
 		},
 	}, material, "")
 	if err != nil {
-		t.Fatalf("buildCompletionArtifacts() error = %v", err)
+		t.Fatalf(testBuildCompletionArtifactsErrFmt, err)
 	}
 
 	var file peerFile
 	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
-		t.Fatalf("Unmarshal(peerData) error = %v", err)
+		t.Fatalf(testUnmarshalPeerDataErrorFormat, err)
 	}
 	if file.IPv4 != testDiscoveredPublicIPv4 {
-		t.Fatalf("peerData IPv4 = %q, want %q", file.IPv4, testDiscoveredPublicIPv4)
+		t.Fatalf(testPeerDataIPv4Format, file.IPv4, testDiscoveredPublicIPv4)
 	}
 }
 
@@ -4851,15 +4856,15 @@ func TestBuildCompletionArtifactsKeepsPrivateObservedIPv4ForPrivateBootstrap(t *
 		},
 	}, material, "")
 	if err != nil {
-		t.Fatalf("buildCompletionArtifacts() error = %v", err)
+		t.Fatalf(testBuildCompletionArtifactsErrFmt, err)
 	}
 
 	var file peerFile
 	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
-		t.Fatalf("Unmarshal(peerData) error = %v", err)
+		t.Fatalf(testUnmarshalPeerDataErrorFormat, err)
 	}
 	if file.IPv4 != testPrivateObservedIPv4 {
-		t.Fatalf("peerData IPv4 = %q, want %q", file.IPv4, testPrivateObservedIPv4)
+		t.Fatalf(testPeerDataIPv4Format, file.IPv4, testPrivateObservedIPv4)
 	}
 }
 
@@ -4946,10 +4951,10 @@ func TestStartBootstrapServiceLaunchesConnectionHandler(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
 		if port != 58103 {
-			t.Fatalf("listenBootstrap() port = %d, want %d", port, 58103)
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
 		}
 		if accountID != testBootstrapAccountID {
-			t.Fatalf("listenBootstrap() accountID = %q, want %q", accountID, testBootstrapAccountID)
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
 		}
 		return &scriptedListener{
 			conns: []net.Conn{connWithRemoteAddr{
