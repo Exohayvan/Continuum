@@ -21,6 +21,7 @@ const (
 	testSessionID       = "session-123"
 	testPassword        = "super-secret"
 	testAccountID       = "account-123"
+	testFirstSeen       = "2026-04-02T00:00:00Z"
 	startupObserverText = "Startup() did not register updater status observer"
 )
 
@@ -274,6 +275,40 @@ func TestBootstrapStateReturnsResolvedValue(t *testing.T) {
 	app := NewApp()
 	if got := app.BootstrapState(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("BootstrapState() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNodeFirstSeenReturnsResolvedValue(t *testing.T) {
+	originalResolveNodeFirstSeen := resolveNodeFirstSeen
+	resolveNodeFirstSeen = func() (string, error) { return testFirstSeen, nil }
+	t.Cleanup(func() {
+		resolveNodeFirstSeen = originalResolveNodeFirstSeen
+	})
+
+	app := NewApp()
+	got, err := app.NodeFirstSeen()
+	if err != nil {
+		t.Fatalf("NodeFirstSeen() error = %v", err)
+	}
+	if got != testFirstSeen {
+		t.Fatalf("NodeFirstSeen() = %q, want %q", got, testFirstSeen)
+	}
+}
+
+func TestNodeFirstSeenReturnsError(t *testing.T) {
+	originalResolveNodeFirstSeen := resolveNodeFirstSeen
+	wantErr := errors.New("node meta failed")
+	resolveNodeFirstSeen = func() (string, error) {
+		return "", wantErr
+	}
+	t.Cleanup(func() {
+		resolveNodeFirstSeen = originalResolveNodeFirstSeen
+	})
+
+	app := NewApp()
+	_, err := app.NodeFirstSeen()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("NodeFirstSeen() error = %v, want %v", err, wantErr)
 	}
 }
 

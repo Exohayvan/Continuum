@@ -286,6 +286,31 @@ func TestSaveLocalKeyUsesDerivedPath(t *testing.T) {
 	}
 }
 
+func TestLoadLocalKeyReturnsPersistedKey(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	accountID := AccountIDFromPublicKey(privateKey.Public().(ed25519.PublicKey))
+	readKeyFile = func(path string) ([]byte, error) {
+		if path != LocalKeyPath(accountID) {
+			t.Fatalf("readKeyFile() path = %q, want %q", path, LocalKeyPath(accountID))
+		}
+		return encodePrivateKey(privateKey), nil
+	}
+
+	loadedKey, err := LoadLocalKey(accountID)
+	if err != nil {
+		t.Fatalf("LoadLocalKey() error = %v", err)
+	}
+	if string(loadedKey) != string(privateKey) {
+		t.Fatal("LoadLocalKey() returned a different private key")
+	}
+}
+
 func TestUsernameHashAndLocalProfile(t *testing.T) {
 	restore := stubAccountHooks(t)
 	defer restore()
@@ -493,6 +518,41 @@ func TestSaveLocalKeyReturnsErrors(t *testing.T) {
 	}
 	if _, err := SaveLocalKey(testAccountID, privateKey); !errors.Is(err, wantErr) {
 		t.Fatalf("SaveLocalKey() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestLoadLocalKeyReturnsErrors(t *testing.T) {
+	restore := stubAccountHooks(t)
+	defer restore()
+
+	if _, err := LoadLocalKey("   "); err == nil {
+		t.Fatal("LoadLocalKey() error = nil, want blank account id failure")
+	}
+
+	wantReadErr := errors.New(testWriteFailed)
+	readKeyFile = func(string) ([]byte, error) {
+		return nil, wantReadErr
+	}
+	if _, err := LoadLocalKey(testAccountID); !errors.Is(err, wantReadErr) {
+		t.Fatalf("LoadLocalKey() error = %v, want %v", err, wantReadErr)
+	}
+
+	readKeyFile = func(string) ([]byte, error) {
+		return []byte(testInvalidBase64), nil
+	}
+	if _, err := LoadLocalKey(testAccountID); err == nil {
+		t.Fatal("LoadLocalKey() error = nil, want decode failure")
+	}
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(generateKeyErrorFormat, err)
+	}
+	readKeyFile = func(string) ([]byte, error) {
+		return encodePrivateKey(privateKey), nil
+	}
+	if _, err := LoadLocalKey(testAccountID); err == nil {
+		t.Fatal("LoadLocalKey() error = nil, want account id mismatch")
 	}
 }
 

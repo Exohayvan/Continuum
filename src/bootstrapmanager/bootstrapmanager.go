@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	BootstrapListURL         = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/bootstrap-list.yaml"
+	BootstrapListURL         = "https://raw.githubusercontent.com/Exohayvan/Continuum/refs/heads/main/network/GatewayNodes.yaml"
+	PublicIPv4LookupURL      = "https://api.ipify.org"
 	peerFileSuffix           = ".peer"
 	metaFileSuffix           = ".meta"
 	pubkeyFileSuffix         = ".pubkey"
@@ -81,9 +82,10 @@ type bootstrapList struct {
 }
 
 type bootstrapNodeConfig struct {
-	NodeID string `yaml:"node_id"`
-	Host   string `yaml:"host"`
-	Port   int    `yaml:"port"`
+	NodeID    string `yaml:"node_id"`
+	AccountID string `yaml:"account_id"`
+	Host      string `yaml:"host"`
+	Port      int    `yaml:"port"`
 }
 
 type unsignedPeerFile struct {
@@ -193,11 +195,12 @@ type bootstrapSessionFinalizeResponse struct {
 }
 
 type pendingSession struct {
-	id       string
-	conn     net.Conn
-	nodeID   string
-	response bootstrapSessionStartResponse
-	timer    *time.Timer
+	id            string
+	conn          net.Conn
+	nodeID        string
+	bootstrapHost string
+	response      bootstrapSessionStartResponse
+	timer         *time.Timer
 }
 
 type existingNodeRecords struct {
@@ -241,29 +244,30 @@ func defaultMarshalIndexJSON(index usernameIndex) ([]byte, error) {
 }
 
 var (
-	ensureDataLayout  = datamanager.EnsureLayout
-	readDirectory     = os.ReadDir
-	readManagedFile   = datamanager.ReadFile
-	writeManagedFile  = datamanager.WriteFile
-	marshalIndexJSON  func(usernameIndex) ([]byte, error)
-	resolveNodeID     = nodeid.GetNodeID
-	createAccount     = accounts.Generate
-	recoverAccount    = accounts.Recover
-	saveLocalProfile  = accounts.SaveLocalProfile
-	httpClient        = &http.Client{Timeout: 5 * time.Second}
-	fetchRemoteList   = fetchRemoteBootstrapList
-	probeEndpoint     = measureEndpointLatency
-	dialBootstrap     = dialBootstrapEndpoint
-	listenBootstrap   = listenBootstrapEndpoint
-	wrapBootstrapConn = networkmanager.WrapConn
-	loadNodeRecords   = loadExistingNodeRecords
-	loadUsernameIndex = loadUsernameIndexCache
-	saveUsernameIndex = saveUsernameIndexCache
-	currentTime       = time.Now
-	scheduleAfter     = time.AfterFunc
-	signPeerOrMeta    = signPayload
-	randomSource      = rand.Reader
-	serverStartOnce   sync.Once
+	ensureDataLayout    = datamanager.EnsureLayout
+	readDirectory       = os.ReadDir
+	readManagedFile     = datamanager.ReadFile
+	writeManagedFile    = datamanager.WriteFile
+	marshalIndexJSON    func(usernameIndex) ([]byte, error)
+	resolveNodeID       = nodeid.GetNodeID
+	createAccount       = accounts.Generate
+	recoverAccount      = accounts.Recover
+	saveLocalProfile    = accounts.SaveLocalProfile
+	httpClient          = &http.Client{Timeout: 5 * time.Second}
+	fetchRemoteList     = fetchRemoteBootstrapList
+	probeEndpoint       = measureEndpointLatency
+	dialBootstrap       = dialBootstrapEndpoint
+	listenBootstrap     = listenBootstrapEndpoint
+	loadNodeRecords     = loadExistingNodeRecords
+	loadUsernameIndex   = loadUsernameIndexCache
+	saveUsernameIndex   = saveUsernameIndexCache
+	loadLocalAccountKey = accounts.LoadLocalKey
+	discoverPublicIPv4  = discoverPublicIPv4FromService
+	currentTime         = time.Now
+	scheduleAfter       = time.AfterFunc
+	signPeerOrMeta      = signPayload
+	randomSource        = rand.Reader
+	serverStartOnce     sync.Once
 
 	pendingSessionsMu sync.Mutex
 	pendingSessions   = map[string]*pendingSession{}
@@ -314,6 +318,17 @@ func LoadState() State {
 		PeerCount:      0,
 		Nodes:          nodes,
 	}
+}
+
+// LocalNodeFirstSeen returns the stored first-seen timestamp from the local
+// verified node metadata when this node has already joined the network.
+func LocalNodeFirstSeen() (string, error) {
+	records, err := loadNodeRecords(resolveNodeID())
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(records.NodeMeta.FirstSeen), nil
 }
 
 func peerFileCount(peersPath string) (int, error) {
@@ -488,15 +503,15 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 	if bootstrapNodeID != "" && bootstrapNodeID == localNodeID {
 		dialHost = "127.0.0.1"
 	}
+	expectedBootstrapAccountID := resolveExpectedBootstrapAccountID(bootstrapNodeID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	conn, err := dialBootstrap(ctx, dialHost, port)
+	conn, err := dialBootstrap(ctx, dialHost, port, expectedBootstrapAccountID)
 	if err != nil {
 		return ConnectResult{}, err
 	}
-	conn = wrapBootstrapConn(conn)
 
 	if err := conn.SetDeadline(currentTime().Add(bootstrapSessionTTL)); err != nil {
 		conn.Close()
@@ -534,10 +549,11 @@ func Connect(host string, port int, bootstrapNodeID string) (ConnectResult, erro
 	}
 
 	session := &pendingSession{
-		id:       sessionID,
-		conn:     conn,
-		nodeID:   localNodeID,
-		response: response,
+		id:            sessionID,
+		conn:          conn,
+		nodeID:        localNodeID,
+		bootstrapHost: strings.TrimSpace(host),
+		response:      response,
 	}
 	session.timer = scheduleAfter(bootstrapSessionTTL, func() {
 		removePendingSession(sessionID)
@@ -975,7 +991,12 @@ func buildCompletionArtifacts(session *pendingSession, material accounts.Materia
 		usernameHash = strings.TrimSpace(session.response.UsernameHash)
 	}
 
-	peerData, err := buildPeerFile(session.response.ObservedIPv4, session.response.Port, material.AccountID, material.PrivateKey)
+	peerIPv4, err := peerIPv4ForCompletion(session)
+	if err != nil {
+		return completionArtifacts{}, err
+	}
+
+	peerData, err := buildPeerFile(peerIPv4, session.response.Port, material.AccountID, material.PrivateKey)
 	if err != nil {
 		return completionArtifacts{}, err
 	}
@@ -995,6 +1016,36 @@ func buildCompletionArtifacts(session *pendingSession, material accounts.Materia
 		accountPubKeyData: accountPubKeyData,
 		accountMetaData:   accountMetaData,
 	}, nil
+}
+
+func peerIPv4ForCompletion(session *pendingSession) (string, error) {
+	observedIPv4 := strings.TrimSpace(session.response.ObservedIPv4)
+	if isRoutableIPv4(observedIPv4) {
+		return observedIPv4, nil
+	}
+
+	bootstrapHost := strings.TrimSpace(session.bootstrapHost)
+	if isLoopbackIPv4(observedIPv4) && isRoutableIPv4(bootstrapHost) {
+		return bootstrapHost, nil
+	}
+
+	if !isRoutableIPv4(bootstrapHost) {
+		if isValidIPv4(observedIPv4) {
+			return observedIPv4, nil
+		}
+
+		return "", errors.New("bootstrap response did not include a usable peer IPv4")
+	}
+
+	publicIPv4, err := discoverPublicIPv4(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("unable to resolve public IPv4 for peer file: %w", err)
+	}
+	if !isRoutableIPv4(publicIPv4) {
+		return "", errors.New("public IPv4 discovery did not return a routable IPv4 address")
+	}
+
+	return publicIPv4, nil
 }
 
 func normalizeCompletionState(response bootstrapSessionStartResponse) completionState {
@@ -1111,8 +1162,12 @@ func startBootstrapService(ctx context.Context) error {
 	if !ok || port <= 0 {
 		return nil
 	}
+	accountID, ok := bootstrapAccountIDForNode(list, localNodeID)
+	if !ok {
+		return errors.New("bootstrap account id is not configured")
+	}
 
-	listener, err := listenBootstrap(port)
+	listener, err := listenBootstrap(port, accountID)
 	if err != nil {
 		return err
 	}
@@ -1124,7 +1179,7 @@ func startBootstrapService(ctx context.Context) error {
 			return err
 		}
 
-		go handleBootstrapConnection(wrapBootstrapConn(conn))
+		go handleBootstrapConnection(conn)
 	}
 }
 
@@ -1258,6 +1313,45 @@ func bootstrapPortForNode(list bootstrapList, localNodeID string) (int, bool) {
 	}
 
 	return 0, false
+}
+
+func bootstrapAccountIDForNode(list bootstrapList, localNodeID string) (string, bool) {
+	for _, config := range list.Nodes {
+		if config.NodeID == localNodeID {
+			accountID := strings.TrimSpace(config.AccountID)
+			if accountID == "" {
+				return "", false
+			}
+
+			return accountID, true
+		}
+	}
+
+	return "", false
+}
+
+func expectedBootstrapAccountID(list bootstrapList, bootstrapNodeID string) string {
+	bootstrapNodeID = strings.TrimSpace(bootstrapNodeID)
+	if bootstrapNodeID == "" {
+		return ""
+	}
+
+	for _, config := range list.Nodes {
+		if strings.TrimSpace(config.NodeID) == bootstrapNodeID {
+			return strings.TrimSpace(config.AccountID)
+		}
+	}
+
+	return ""
+}
+
+func resolveExpectedBootstrapAccountID(bootstrapNodeID string) string {
+	list, err := loadBootstrapList(context.Background())
+	if err != nil {
+		return ""
+	}
+
+	return expectedBootstrapAccountID(list, bootstrapNodeID)
 }
 
 func defaultListenPort(localNodeID string) int {
@@ -1683,6 +1777,67 @@ func loadExistingAccountBlob(accountID string, accountPubKey ed25519.PublicKey) 
 	return blobData, true, nil
 }
 
+func discoverPublicIPv4FromService(ctx context.Context) (string, error) {
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, PublicIPv4LookupURL, nil)
+	request.Header.Set("User-Agent", "continuum-bootstrap")
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("public IPv4 lookup returned %s", response.Status)
+	}
+
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+
+	ipv4 := strings.TrimSpace(string(data))
+	if !isValidIPv4(ipv4) {
+		return "", errors.New("public IPv4 lookup returned an invalid IPv4 address")
+	}
+
+	return ipv4, nil
+}
+
+func isValidIPv4(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	return ip != nil && ip.To4() != nil
+}
+
+func isLoopbackIPv4(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if ip == nil {
+		return false
+	}
+
+	return ip.To4() != nil && ip.IsLoopback()
+}
+
+func isRoutableIPv4(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if ip == nil {
+		return false
+	}
+
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	if ipv4.IsLoopback() || ipv4.IsPrivate() || ipv4.IsLinkLocalMulticast() || ipv4.IsLinkLocalUnicast() || ipv4.IsMulticast() || ipv4.IsUnspecified() {
+		return false
+	}
+	if ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127 {
+		return false
+	}
+
+	return true
+}
+
 func extractObservedIPv4(remoteAddr net.Addr) (string, error) {
 	if remoteAddr == nil {
 		return "", errors.New("missing remote address")
@@ -1906,15 +2061,17 @@ func accountMetaRelativePath(accountID string) string {
 	return filepath.Join("network", "accounts", strings.TrimSpace(accountID)+metaFileSuffix)
 }
 
-func dialBootstrapEndpoint(ctx context.Context, host string, port int) (net.Conn, error) {
-	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	dialer := net.Dialer{}
-	return dialer.DialContext(ctx, "tcp4", address)
+func dialBootstrapEndpoint(ctx context.Context, host string, port int, expectedAccountID string) (net.Conn, error) {
+	return networkmanager.DialSecureTCP4(ctx, host, port, expectedAccountID)
 }
 
-func listenBootstrapEndpoint(port int) (net.Listener, error) {
-	address := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port))
-	return net.Listen("tcp4", address)
+func listenBootstrapEndpoint(port int, accountID string) (net.Listener, error) {
+	privateKey, err := loadLocalAccountKey(accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	return networkmanager.ListenSecureTCP4(port, privateKey)
 }
 
 func storePendingSession(session *pendingSession) {
