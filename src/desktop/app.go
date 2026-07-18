@@ -22,6 +22,7 @@ var (
 	recoverBootstrap     = bootstrapmanager.Recover
 	loginBootstrap       = bootstrapmanager.Login
 	registerBootstrap    = bootstrapmanager.Register
+	resolveNodeFirstSeen = bootstrapmanager.LocalNodeFirstSeen
 	resolveDiskUsage     = datamanager.Snapshot
 	resolveNetworkUsage  = networkmanager.Snapshot
 	resolveVersion       = version.Get
@@ -82,6 +83,12 @@ func (a *App) NodeID() string {
 // BootstrapState returns the current bootstrap discovery view model.
 func (a *App) BootstrapState() bootstrapmanager.State {
 	return resolveBootstrap()
+}
+
+// NodeFirstSeen returns when this node first joined the network according to
+// the local signed node metadata.
+func (a *App) NodeFirstSeen() (string, error) {
+	return resolveNodeFirstSeen()
 }
 
 // ConnectBootstrap attempts the initial bootstrap handshake against a selected node.

@@ -250,6 +250,29 @@ func SaveLocalKey(accountID string, privateKey ed25519.PrivateKey) (string, erro
 	return path, nil
 }
 
+// LoadLocalKey reads and validates the persisted local account private key.
+func LoadLocalKey(accountID string) (ed25519.PrivateKey, error) {
+	accountID, err := requiredAccountID(accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := readKeyFile(LocalKeyPath(accountID))
+	if err != nil {
+		return nil, err
+	}
+
+	privateKey, err := decodePrivateKey(data)
+	if err != nil {
+		return nil, err
+	}
+	if AccountIDFromPublicKey(privateKey.Public().(ed25519.PublicKey)) != accountID {
+		return nil, errors.New("local account key does not match account id")
+	}
+
+	return privateKey, nil
+}
+
 // BuildLocalProfile serializes the local plaintext account profile.
 func BuildLocalProfile(accountID, username string) ([]byte, error) {
 	accountID, err := requiredAccountID(accountID)

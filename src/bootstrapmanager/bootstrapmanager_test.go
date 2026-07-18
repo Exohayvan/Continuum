@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,13 +23,15 @@ import (
 
 	"continuum/src/accounts"
 	"continuum/src/datamanager"
-	"continuum/src/networkmanager"
 	"continuum/src/nodeid"
 )
 
 const (
 	testBootstrapHost                        = "162.191.52.239"
 	testLoopbackHost                         = "127.0.0.1"
+	testPrivateBootstrapHost                 = "192.168.1.1"
+	testPrivateObservedIPv4                  = "192.168.1.20"
+	testDiscoveredPublicIPv4                 = "203.0.113.44"
 	testBootstrapName                        = "na-east"
 	testBootstrapTimestamp                   = "2026-04-02T00:00:00Z"
 	testUpdatedTimestamp                     = "2026-04-02T01:00:00Z"
@@ -50,9 +53,14 @@ const (
 	testMkdirAllErrorFormat                  = "MkdirAll() error = %v"
 	testWriteFileErrorFormat                 = "WriteFile() error = %v"
 	testLoadStateNeedsBootstrapText          = "LoadState() NeedsBootstrap = false, want true"
+	testListenBootstrapPortFormat            = "listenBootstrap() port = %d, want %d"
+	testListenBootstrapAccountIDFormat       = "listenBootstrap() accountID = %q, want %q"
 	testBuildAccountFixturesErrorFormat      = "buildAccountFixtures() error = %v"
 	testBuildAccountFixturesOtherErrorFormat = "buildAccountFixtures() other error = %v"
 	testBuildMetaWithUsernameHashErrFmt      = "BuildMetaWithUsernameHash() error = %v"
+	testBuildCompletionArtifactsErrFmt       = "buildCompletionArtifacts() error = %v"
+	testUnmarshalPeerDataErrorFormat         = "Unmarshal(peerData) error = %v"
+	testPeerDataIPv4Format                   = "peerData IPv4 = %q, want %q"
 	testConnectErrorFormat                   = "Connect() error = %v"
 	testConnectWantErrorFormat               = "Connect() error = %v, want %v"
 	testCompleteWantErrorFormat              = "Complete() error = %v, want %s"
@@ -76,12 +84,15 @@ const (
 	testRecoveryPassword                     = "recovery-pass"
 	testRecoverySessionID                    = "session-recover"
 	testBootstrapNodeID                      = "264648e40c71d6385d470ca4c8e5156a1abb74af6aa1e92a948066139a5b5e45"
+	testBootstrapAccountID                   = "3d06879ec5324c32f157f9ce014997c95bef0b1f0dcd9261c2e778a983b0a009"
 	testOtherAccountID                       = "other-account"
 	testFirstIndexedAccountID                = "account-1"
 	testSecondIndexedAccountID               = "account-2"
 	testAliceHashKey                         = "hash-alice"
 	testInvalidJSON                          = "not-json"
 	testInvalidBase64                        = "not-base64"
+	testInvalidIPv4                          = "not-an-ip"
+	testOKStatusText                         = "200 OK"
 	testWriteFailedText                      = "write failed"
 	testSignFailedText                       = "sign failed"
 	testFinalizeFailedText                   = "finalize failed"
@@ -234,6 +245,49 @@ func TestLoadStateFetchesAndSortsBootstrapNodes(t *testing.T) {
 	}
 	if state.Nodes[0].Name != testBootstrapName || state.Nodes[0].LatencyMilliseconds != 12 {
 		t.Fatalf("LoadState().Nodes[0] = %#v, want %s first with 12ms", state.Nodes[0], testBootstrapName)
+	}
+}
+
+func TestLocalNodeFirstSeenReturnsVerifiedNodeMetaTimestamp(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testJoiningNodeID }
+	loadNodeRecords = func(nodeID string) (existingNodeRecords, error) {
+		if nodeID != testJoiningNodeID {
+			t.Fatalf("loadNodeRecords() nodeID = %q, want %q", nodeID, testJoiningNodeID)
+		}
+
+		return existingNodeRecords{
+			KnownNode: true,
+			NodeMeta: metaFile{
+				FirstSeen: testBootstrapTimestamp,
+			},
+		}, nil
+	}
+
+	got, err := LocalNodeFirstSeen()
+	if err != nil {
+		t.Fatalf("LocalNodeFirstSeen() error = %v", err)
+	}
+	if got != testBootstrapTimestamp {
+		t.Fatalf("LocalNodeFirstSeen() = %q, want %q", got, testBootstrapTimestamp)
+	}
+}
+
+func TestLocalNodeFirstSeenReturnsLoadError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testJoiningNodeID }
+	wantErr := errors.New(testLoadFailedText)
+	loadNodeRecords = func(string) (existingNodeRecords, error) {
+		return existingNodeRecords{}, wantErr
+	}
+
+	_, err := LocalNodeFirstSeen()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("LocalNodeFirstSeen() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -402,7 +456,7 @@ func TestConnectReturnsAwaitingPasswordSession(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return clientConn, nil
 	}
 
@@ -702,7 +756,19 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
-	listener, err := listenBootstrapEndpoint(0)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf(testGenerateKeyErrorFormat, err)
+	}
+	accountID := accounts.AccountIDFromPublicKey(publicKey)
+	loadLocalAccountKey = func(gotAccountID string) (ed25519.PrivateKey, error) {
+		if gotAccountID != accountID {
+			t.Fatalf("loadLocalAccountKey() accountID = %q, want %q", gotAccountID, accountID)
+		}
+		return privateKey, nil
+	}
+
+	listener, err := listenBootstrapEndpoint(0, accountID)
 	if err != nil {
 		t.Fatalf("listenBootstrapEndpoint() error = %v", err)
 	}
@@ -720,7 +786,7 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	conn, err := dialBootstrapEndpoint(context.Background(), testLoopbackHost, port)
+	conn, err := dialBootstrapEndpoint(context.Background(), testLoopbackHost, port, accountID)
 	if err != nil {
 		t.Fatalf("dialBootstrapEndpoint() error = %v", err)
 	}
@@ -728,6 +794,20 @@ func TestDialAndListenBootstrapEndpoints(t *testing.T) {
 
 	if err := <-done; err != nil {
 		t.Fatalf("listener.Accept() error = %v", err)
+	}
+}
+
+func TestListenBootstrapEndpointReturnsLoadLocalKeyError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	wantErr := errors.New(testLoadFailedText)
+	loadLocalAccountKey = func(string) (ed25519.PrivateKey, error) {
+		return nil, wantErr
+	}
+
+	if _, err := listenBootstrapEndpoint(0, testBootstrapAccountID); !errors.Is(err, wantErr) {
+		t.Fatalf("listenBootstrapEndpoint() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -757,7 +837,7 @@ func TestConnectReturnsDialError(t *testing.T) {
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	wantErr := errors.New("dial failed")
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return nil, wantErr
 	}
 
@@ -773,10 +853,13 @@ func TestConnectUsesLoopbackForLocalBootstrapNode(t *testing.T) {
 	resolveNodeID = func() string { return testJoiningNodeID }
 	dialedHost := ""
 	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(_ context.Context, host string, port int) (net.Conn, error) {
+	dialBootstrap = func(_ context.Context, host string, port int, expectedAccountID string) (net.Conn, error) {
 		dialedHost = host
 		if port != 58103 {
 			t.Fatalf("dialBootstrap() port = %d, want %d", port, 58103)
+		}
+		if expectedAccountID != "" {
+			t.Fatalf("dialBootstrap() expectedAccountID = %q, want empty", expectedAccountID)
 		}
 		return clientConn, nil
 	}
@@ -806,20 +889,24 @@ func TestConnectUsesLoopbackForLocalBootstrapNode(t *testing.T) {
 	removePendingSession(result.SessionID)
 }
 
-func TestConnectWrapsTrackedBootstrapConnection(t *testing.T) {
+func TestConnectUsesExpectedBootstrapAccountIDForListedBootstrap(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
 
 	resolveNodeID = func() string { return testJoiningNodeID }
-	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
-		return clientConn, nil
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return loadBootstrapListFixture(t), nil
 	}
 
-	var wrappedConn net.Conn
-	wrapBootstrapConn = func(conn net.Conn) net.Conn {
-		wrappedConn = conn
-		return conn
+	serverConn, clientConn := net.Pipe()
+	dialBootstrap = func(_ context.Context, host string, port int, expectedAccountID string) (net.Conn, error) {
+		if host != testBootstrapHost || port != 58103 {
+			t.Fatalf("dialBootstrap() args = (%q, %d), want (%q, %d)", host, port, testBootstrapHost, 58103)
+		}
+		if expectedAccountID != testBootstrapAccountID {
+			t.Fatalf("dialBootstrap() expectedAccountID = %q, want %q", expectedAccountID, testBootstrapAccountID)
+		}
+		return clientConn, nil
 	}
 
 	go func() {
@@ -829,21 +916,16 @@ func TestConnectWrapsTrackedBootstrapConnection(t *testing.T) {
 			t.Errorf(testDecodeErrorFormat, err)
 			return
 		}
-		if err := json.NewEncoder(serverConn).Encode(bootstrapSessionStartResponse{
+		_ = json.NewEncoder(serverConn).Encode(bootstrapSessionStartResponse{
 			ObservedIPv4: testBootstrapHost,
 			Port:         58103,
 			Reachable:    true,
-		}); err != nil {
-			t.Errorf(testEncodeErrorFormat, err)
-		}
+		})
 	}()
 
-	result, err := Connect(testBootstrapHost, 58103, "")
+	result, err := Connect(testBootstrapHost, 58103, testBootstrapNodeID)
 	if err != nil {
 		t.Fatalf(testConnectErrorFormat, err)
-	}
-	if wrappedConn == nil {
-		t.Fatal("Connect() did not wrap the bootstrap connection")
 	}
 
 	removePendingSession(result.SessionID)
@@ -855,7 +937,7 @@ func TestConnectReturnsDeadlineError(t *testing.T) {
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	wantErr := errors.New("deadline failed")
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{deadlineErr: wantErr}, nil
 	}
 
@@ -870,7 +952,7 @@ func TestConnectReturnsEncodeError(t *testing.T) {
 
 	resolveNodeID = func() string { return testJoiningNodeID }
 	wantErr := errors.New(testWriteFailedText)
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{writeErr: wantErr}, nil
 	}
 
@@ -884,7 +966,7 @@ func TestConnectReturnsDecodeError(t *testing.T) {
 	defer restore()
 
 	resolveNodeID = func() string { return testJoiningNodeID }
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: []byte(testInvalidJSON)}, nil
 	}
 
@@ -902,7 +984,7 @@ func TestConnectReturnsBootstrapResponseError(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testMarshalErrorFormat, err)
 	}
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
 	}
 
@@ -920,7 +1002,7 @@ func TestConnectRejectsUnusableEndpointResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testMarshalErrorFormat, err)
 	}
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
 	}
 
@@ -938,7 +1020,7 @@ func TestConnectReturnsSessionIDError(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testMarshalErrorFormat, err)
 	}
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return &stubConn{readData: responseData}, nil
 	}
 	randomSource = errReader{err: errors.New("random failed")}
@@ -960,7 +1042,7 @@ func TestConnectRemovesPendingSessionWhenTimerFires(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	dialBootstrap = func(context.Context, string, int) (net.Conn, error) {
+	dialBootstrap = func(context.Context, string, int, string) (net.Conn, error) {
 		return clientConn, nil
 	}
 
@@ -1007,7 +1089,13 @@ func TestStartServiceInvokesBootstrapLoop(t *testing.T) {
 	}
 
 	called := make(chan struct{}, 1)
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
+		}
 		called <- struct{}{}
 		return &failingListener{acceptErr: errors.New("stop")}, nil
 	}
@@ -1031,7 +1119,13 @@ func TestStartBootstrapServiceReturnsAcceptError(t *testing.T) {
 		return bootstrapList, nil
 	}
 	wantErr := errors.New("listener stopped")
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
+		}
 		return &failingListener{acceptErr: wantErr}, nil
 	}
 
@@ -1062,7 +1156,7 @@ func TestStartBootstrapServiceNoOpWithoutLocalNodeID(t *testing.T) {
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
 		return loadBootstrapListFixture(t), nil
 	}
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(int, string) (net.Listener, error) {
 		t.Fatal("listenBootstrap() called without local node id")
 		return nil, nil
 	}
@@ -1080,13 +1174,33 @@ func TestStartBootstrapServiceNoOpWhenLocalNodeIsNotBootstrap(t *testing.T) {
 	fetchRemoteList = func(context.Context, string) ([]byte, error) {
 		return loadBootstrapListFixture(t), nil
 	}
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(int, string) (net.Listener, error) {
 		t.Fatal("listenBootstrap() called for non-bootstrap node")
 		return nil, nil
 	}
 
 	if err := startBootstrapService(context.Background()); err != nil {
 		t.Fatalf("startBootstrapService() error = %v", err)
+	}
+}
+
+func TestStartBootstrapServiceReturnsMissingBootstrapAccountIDError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	resolveNodeID = func() string { return testBootstrapNodeID }
+	fetchRemoteList = func(context.Context, string) ([]byte, error) {
+		return []byte(`version: 1
+nodes:
+  na-east:
+    node_id: "` + testBootstrapNodeID + `"
+    host: "` + testBootstrapHost + `"
+    port: 58103
+`), nil
+	}
+
+	if err := startBootstrapService(context.Background()); err == nil || err.Error() != "bootstrap account id is not configured" {
+		t.Fatalf("startBootstrapService() error = %v, want bootstrap account id is not configured", err)
 	}
 }
 
@@ -1099,7 +1213,13 @@ func TestStartBootstrapServiceReturnsListenError(t *testing.T) {
 		return loadBootstrapListFixture(t), nil
 	}
 	wantErr := errors.New("listen failed")
-	listenBootstrap = func(int) (net.Listener, error) {
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
+		}
+		if accountID != testBootstrapAccountID {
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
+		}
 		return nil, wantErr
 	}
 
@@ -3426,6 +3546,34 @@ func TestBootstrapPortForNodeUsesDefaultPortWhenConfiguredPortIsInvalid(t *testi
 	}
 }
 
+func TestBootstrapAccountIDForNodeReturnsMissingWhenNodeIsUnknown(t *testing.T) {
+	accountID, ok := bootstrapAccountIDForNode(bootstrapList{
+		Nodes: map[string]bootstrapNodeConfig{
+			testBootstrapName: {
+				NodeID:    testBootstrapNodeID,
+				AccountID: testBootstrapAccountID,
+			},
+		},
+	}, testJoiningNodeID)
+	if ok || accountID != "" {
+		t.Fatalf("bootstrapAccountIDForNode() = (%q, %t), want empty false", accountID, ok)
+	}
+}
+
+func TestExpectedBootstrapAccountIDReturnsEmptyWhenNodeIsUnknown(t *testing.T) {
+	got := expectedBootstrapAccountID(bootstrapList{
+		Nodes: map[string]bootstrapNodeConfig{
+			testBootstrapName: {
+				NodeID:    testBootstrapNodeID,
+				AccountID: testBootstrapAccountID,
+			},
+		},
+	}, testJoiningNodeID)
+	if got != "" {
+		t.Fatalf("expectedBootstrapAccountID() = %q, want empty", got)
+	}
+}
+
 func TestDefaultListenPortReturnsDefaultOnLoadError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -4111,6 +4259,126 @@ func TestExtractObservedIPv4ReturnsErrors(t *testing.T) {
 	}
 }
 
+func TestDiscoverPublicIPv4FromServiceReturnsErrors(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	t.Run("request failure", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New(testLoadFailedText)
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want failure")
+		}
+	})
+
+	t.Run("bad status", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Status:     "502 Bad Gateway",
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want status failure")
+		}
+	})
+
+	t.Run("invalid body", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     testOKStatusText,
+				Body:       io.NopCloser(strings.NewReader(testInvalidJSON)),
+			}, nil
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want invalid IPv4 failure")
+		}
+	})
+
+	t.Run("read failure", func(t *testing.T) {
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     testOKStatusText,
+				Body:       failingReadCloser{err: errors.New(testLoadFailedText)},
+			}, nil
+		})}
+
+		if _, err := discoverPublicIPv4FromService(context.Background()); err == nil {
+			t.Fatal("discoverPublicIPv4FromService() error = nil, want read failure")
+		}
+	})
+}
+
+func TestDiscoverPublicIPv4FromServiceReturnsIPv4(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	httpClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != PublicIPv4LookupURL {
+			t.Fatalf("discoverPublicIPv4FromService() url = %q, want %q", request.URL.String(), PublicIPv4LookupURL)
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     testOKStatusText,
+			Body:       io.NopCloser(strings.NewReader(testDiscoveredPublicIPv4 + "\n")),
+		}, nil
+	})}
+
+	got, err := discoverPublicIPv4FromService(context.Background())
+	if err != nil {
+		t.Fatalf("discoverPublicIPv4FromService() error = %v", err)
+	}
+	if got != testDiscoveredPublicIPv4 {
+		t.Fatalf("discoverPublicIPv4FromService() = %q, want %q", got, testDiscoveredPublicIPv4)
+	}
+}
+
+func TestIsRoutableIPv4(t *testing.T) {
+	cases := []struct {
+		address string
+		want    bool
+	}{
+		{address: testBootstrapHost, want: true},
+		{address: testLoopbackHost, want: false},
+		{address: testPrivateObservedIPv4, want: false},
+		{address: "100.64.0.1", want: false},
+		{address: "", want: false},
+		{address: testInvalidIPv4, want: false},
+		{address: "::1", want: false},
+	}
+
+	for _, tc := range cases {
+		if got := isRoutableIPv4(tc.address); got != tc.want {
+			t.Fatalf("isRoutableIPv4(%q) = %t, want %t", tc.address, got, tc.want)
+		}
+	}
+}
+
+func TestIsLoopbackIPv4(t *testing.T) {
+	cases := []struct {
+		address string
+		want    bool
+	}{
+		{address: testLoopbackHost, want: true},
+		{address: testBootstrapHost, want: false},
+		{address: testInvalidIPv4, want: false},
+	}
+
+	for _, tc := range cases {
+		if got := isLoopbackIPv4(tc.address); got != tc.want {
+			t.Fatalf("isLoopbackIPv4(%q) = %t, want %t", tc.address, got, tc.want)
+		}
+	}
+}
+
 func TestSignPayloadReturnsMarshalError(t *testing.T) {
 	if _, err := signPayload(make(ed25519.PrivateKey, ed25519.PrivateKeySize), make(chan int)); err == nil {
 		t.Fatal("signPayload() error = nil, want marshal failure")
@@ -4580,6 +4848,151 @@ func TestBuildCompletionArtifactsReturnsPeerSignError(t *testing.T) {
 	}
 }
 
+func TestBuildCompletionArtifactsUsesBootstrapHostForLoopbackObservedIPv4(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	artifacts, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testLoopbackHost,
+			Port:         58103,
+		},
+	}, material, "")
+	if err != nil {
+		t.Fatalf(testBuildCompletionArtifactsErrFmt, err)
+	}
+
+	var file peerFile
+	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
+		t.Fatalf(testUnmarshalPeerDataErrorFormat, err)
+	}
+	if file.IPv4 != testBootstrapHost {
+		t.Fatalf(testPeerDataIPv4Format, file.IPv4, testBootstrapHost)
+	}
+}
+
+func TestBuildCompletionArtifactsUsesDiscoveredPublicIPv4ForPublicBootstrap(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	discoverPublicIPv4 = func(context.Context) (string, error) {
+		return testDiscoveredPublicIPv4, nil
+	}
+
+	artifacts, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err != nil {
+		t.Fatalf(testBuildCompletionArtifactsErrFmt, err)
+	}
+
+	var file peerFile
+	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
+		t.Fatalf(testUnmarshalPeerDataErrorFormat, err)
+	}
+	if file.IPv4 != testDiscoveredPublicIPv4 {
+		t.Fatalf(testPeerDataIPv4Format, file.IPv4, testDiscoveredPublicIPv4)
+	}
+}
+
+func TestBuildCompletionArtifactsKeepsPrivateObservedIPv4ForPrivateBootstrap(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	artifacts, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testPrivateBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err != nil {
+		t.Fatalf(testBuildCompletionArtifactsErrFmt, err)
+	}
+
+	var file peerFile
+	if err := json.Unmarshal(artifacts.peerData, &file); err != nil {
+		t.Fatalf(testUnmarshalPeerDataErrorFormat, err)
+	}
+	if file.IPv4 != testPrivateObservedIPv4 {
+		t.Fatalf(testPeerDataIPv4Format, file.IPv4, testPrivateObservedIPv4)
+	}
+}
+
+func TestBuildCompletionArtifactsReturnsPublicIPv4DiscoveryError(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	wantErr := errors.New(testLoadFailedText)
+	discoverPublicIPv4 = func(context.Context) (string, error) {
+		return "", wantErr
+	}
+
+	_, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("buildCompletionArtifacts() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestBuildCompletionArtifactsReturnsUnusablePeerIPv4Error(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	_, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testPrivateBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testInvalidIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err == nil {
+		t.Fatal("buildCompletionArtifacts() error = nil, want unusable peer IPv4 failure")
+	}
+}
+
+func TestBuildCompletionArtifactsReturnsNonRoutableDiscoveredIPv4Error(t *testing.T) {
+	restore := stubBootstrapHooks(t)
+	defer restore()
+
+	material := testBootstrapMaterial(t)
+	discoverPublicIPv4 = func(context.Context) (string, error) {
+		return testPrivateObservedIPv4, nil
+	}
+
+	_, err := buildCompletionArtifacts(&pendingSession{
+		nodeID:        testJoiningNodeID,
+		bootstrapHost: testBootstrapHost,
+		response: bootstrapSessionStartResponse{
+			ObservedIPv4: testPrivateObservedIPv4,
+			Port:         58103,
+		},
+	}, material, "")
+	if err == nil {
+		t.Fatal("buildCompletionArtifacts() error = nil, want non-routable discovered IPv4 failure")
+	}
+}
+
 func TestBuildCompletionArtifactsReturnsMetaSignError(t *testing.T) {
 	restore := stubBootstrapHooks(t)
 	defer restore()
@@ -4638,75 +5051,31 @@ func TestStartBootstrapServiceLaunchesConnectionHandler(t *testing.T) {
 	}
 
 	serverConn, clientConn := net.Pipe()
-	listenBootstrap = func(int) (net.Listener, error) {
-		return &scriptedListener{
-			conns: []net.Conn{connWithRemoteAddr{
-				Conn:       serverConn,
-				remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
-			}},
-			acceptErr: errors.New("stop"),
-		}, nil
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- startBootstrapService(context.Background())
-	}()
-
-	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
-		t.Fatalf(testWriteErrorFormat, err)
-	}
-	_ = clientConn.Close()
-
-	if err := <-done; err == nil || err.Error() != "stop" {
-		t.Fatalf("startBootstrapService() error = %v, want stop", err)
-	}
-}
-
-func TestStartBootstrapServiceWrapsAcceptedConnection(t *testing.T) {
-	restore := stubBootstrapHooks(t)
-	defer restore()
-
-	resolveNodeID = func() string { return testBootstrapNodeID }
-	fetchRemoteList = func(context.Context, string) ([]byte, error) {
-		return loadBootstrapListFixture(t), nil
-	}
-
-	serverConn, clientConn := net.Pipe()
-	listenBootstrap = func(int) (net.Listener, error) {
-		return &scriptedListener{
-			conns: []net.Conn{connWithRemoteAddr{
-				Conn:       serverConn,
-				remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
-			}},
-			acceptErr: errors.New("stop"),
-		}, nil
-	}
-
-	wrapped := make(chan net.Conn, 1)
-	wrapBootstrapConn = func(conn net.Conn) net.Conn {
-		wrapped <- conn
-		return conn
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- startBootstrapService(context.Background())
-	}()
-
-	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
-		t.Fatalf(testWriteErrorFormat, err)
-	}
-	_ = clientConn.Close()
-
-	select {
-	case got := <-wrapped:
-		if got == nil {
-			t.Fatal("startBootstrapService() wrapped nil connection")
+	listenBootstrap = func(port int, accountID string) (net.Listener, error) {
+		if port != 58103 {
+			t.Fatalf(testListenBootstrapPortFormat, port, 58103)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("startBootstrapService() did not wrap the accepted connection")
+		if accountID != testBootstrapAccountID {
+			t.Fatalf(testListenBootstrapAccountIDFormat, accountID, testBootstrapAccountID)
+		}
+		return &scriptedListener{
+			conns: []net.Conn{connWithRemoteAddr{
+				Conn:       serverConn,
+				remoteAddr: &net.TCPAddr{IP: net.ParseIP(testBootstrapHost), Port: 43001},
+			}},
+			acceptErr: errors.New("stop"),
+		}, nil
 	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- startBootstrapService(context.Background())
+	}()
+
+	if _, err := clientConn.Write([]byte(testInvalidJSON)); err != nil {
+		t.Fatalf(testWriteErrorFormat, err)
+	}
+	_ = clientConn.Close()
 
 	if err := <-done; err == nil || err.Error() != "stop" {
 		t.Fatalf("startBootstrapService() error = %v, want stop", err)
@@ -5061,7 +5430,7 @@ func loadBootstrapListFixture(t *testing.T) []byte {
 		t.Fatal("runtime.Caller() failed to resolve bootstrap test path")
 	}
 
-	bootstrapListPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "network", "bootstrap-list.yaml")
+	bootstrapListPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "network", "GatewayNodes.yaml")
 	data, err := os.ReadFile(bootstrapListPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", bootstrapListPath, err)
@@ -5087,10 +5456,11 @@ func stubBootstrapHooks(t *testing.T) func() {
 	originalProbeEndpoint := probeEndpoint
 	originalDialBootstrap := dialBootstrap
 	originalListenBootstrap := listenBootstrap
-	originalWrapBootstrapConn := wrapBootstrapConn
+	originalLoadLocalAccountKey := loadLocalAccountKey
 	originalLoadNodeRecords := loadNodeRecords
 	originalLoadUsernameIndex := loadUsernameIndex
 	originalSaveUsernameIndex := saveUsernameIndex
+	originalDiscoverPublicIPv4 := discoverPublicIPv4
 	originalCurrentTime := currentTime
 	originalScheduleAfter := scheduleAfter
 	originalSignPeerOrMeta := signPeerOrMeta
@@ -5112,10 +5482,11 @@ func stubBootstrapHooks(t *testing.T) func() {
 	probeEndpoint = measureEndpointLatency
 	dialBootstrap = dialBootstrapEndpoint
 	listenBootstrap = listenBootstrapEndpoint
-	wrapBootstrapConn = networkmanager.WrapConn
+	loadLocalAccountKey = accounts.LoadLocalKey
 	loadNodeRecords = loadExistingNodeRecords
 	loadUsernameIndex = loadUsernameIndexCache
 	saveUsernameIndex = saveUsernameIndexCache
+	discoverPublicIPv4 = discoverPublicIPv4FromService
 	currentTime = time.Now
 	scheduleAfter = time.AfterFunc
 	signPeerOrMeta = signPayload
@@ -5139,10 +5510,11 @@ func stubBootstrapHooks(t *testing.T) func() {
 		probeEndpoint = originalProbeEndpoint
 		dialBootstrap = originalDialBootstrap
 		listenBootstrap = originalListenBootstrap
-		wrapBootstrapConn = originalWrapBootstrapConn
+		loadLocalAccountKey = originalLoadLocalAccountKey
 		loadNodeRecords = originalLoadNodeRecords
 		loadUsernameIndex = originalLoadUsernameIndex
 		saveUsernameIndex = originalSaveUsernameIndex
+		discoverPublicIPv4 = originalDiscoverPublicIPv4
 		currentTime = originalCurrentTime
 		scheduleAfter = originalScheduleAfter
 		signPeerOrMeta = originalSignPeerOrMeta
@@ -5208,6 +5580,18 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (f failingReadCloser) Read([]byte) (int, error) {
+	return 0, f.err
+}
+
+func (f failingReadCloser) Close() error {
+	return nil
 }
 
 type stubConn struct {
